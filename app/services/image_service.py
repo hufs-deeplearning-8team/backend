@@ -74,6 +74,10 @@ class ImageService:
         result = await database.fetch_one(query)
         inserted_data = dict(result)
         image_id = inserted_data["id"]
+
+
+        ## AI에 이미지 전송하고 받아오기
+        
         
         # 파일 내용 읽기
         contents = await file.read()
@@ -94,6 +98,8 @@ class ImageService:
         
         logger.info(f"User {user_id} requested their uploaded images (limit={limit}, offset={offset})")
         
+        
+
         try:
             # 사용자가 업로드한 이미지 목록 조회
             query = (
@@ -105,7 +111,7 @@ class ImageService:
             )
             
             images = await database.fetch_all(query)
-
+            
             # 응답 데이터 구성
             image_list = []
             for image in images:

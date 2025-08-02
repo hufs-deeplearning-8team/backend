@@ -81,6 +81,7 @@ class ValidationService:
             # AI 서버 시뮬레이션 (실제로는 외부 AI 서버에 HTTP 요청)
             ai_response = await self.simulate_ai_validation(contents, original_filename)
             
+            
             logger.info(f"AI validation result: watermark={ai_response.has_watermark}, confidence={ai_response.confidence_score}")
             
             # ValidationRecord에 결과 저장
@@ -101,6 +102,7 @@ class ValidationService:
             
             # S3에 검증 입력 이미지 저장
             s3_record_path = self.storage_service.get_record_path(validation_uuid, original_filename)
+            
             try:
                 await self.storage_service.upload_file(contents, s3_record_path)
                 logger.info(f"Validation input image saved to S3: {s3_record_path}")

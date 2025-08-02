@@ -15,7 +15,10 @@ class StorageService:
             endpoint_url=settings.AWS_S3_ENDPOINT,
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            config=Config(signature_version=settings.AWS_SIGNATURE_VERSION),
+            config=Config(
+                signature_version='s3v4',
+                s3={'addressing_style': 'path'}
+            ),
             region_name=settings.AWS_REGION_NAME
         )
         self.bucket_name = settings.BUCKET_NAME
