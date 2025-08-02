@@ -19,21 +19,16 @@ services:
       - MINIO_ROOT_PASSWORD=12345678       # 루트 비밀번호 (8자 이상 필수)
       - TZ=Asia/Seoul                      # 시간대 설정
     command: server /data --console-address ":9001" # MinIO 서버 실행 명령
-    # volumes:                               # 데이터 볼륨 매핑
-      # - ./minio/data:/data
     ports:
       - "9000:9000"   # S3 API
       - "9001:9001"   # 웹 콘솔 UI
 
   backend:
-    image: aegis-backend:latest          # Aegis 백엔드 이미지
+    image: daehyuh/aegis-backend:latest      # Aegis 백엔드 이미지
     container_name: aegis-backend            # 컨테이너 이름
-    environment:                           # 환경변수 설정
-      - DB_HOST=db                         # 데이터베이스 호스트
-      - DB_PORT=3306                        # 데이터베이스 포트
-      - DB_USER=root                        # 데이터베이스 사용자
-      - DB_PASSWORD=1234                    # 데이터베이스 비밀번호
-      - S3_ENDPOINT=http://s3:9000         # S3 엔드포인트
-      - S3_ACCESS_KEY=admin                 # S3 액세스 키
-      - S3_SECRET_KEY=12345678              # S3 비밀 키
-      - TZ=Asia/Seoul                      # 시간대 설정
+    env_file:                               
+      - .env                                
+    environment:
+      - TZ=Asia/Seoul
+    ports:
+      - "8000:8000"                          # 백엔드 API 포트

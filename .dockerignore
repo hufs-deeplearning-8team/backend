@@ -109,3 +109,14 @@ venv.bak/
 
 ########
 minio/
+
+# Docker specific
+docker-compose*
+deploy.sh
+
+# Git
+.git
+.gitignore
+
+# GitHub
+.github/
