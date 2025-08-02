@@ -17,9 +17,15 @@ class StorageService:
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
             config=Config(
                 signature_version='s3v4',
-                s3={'addressing_style': 'path'}
+                s3={
+                    'addressing_style': 'path',
+                    'use_ssl': True,
+                    'verify': False
+                }
             ),
-            region_name=settings.AWS_REGION_NAME
+            region_name=settings.AWS_REGION_NAME,
+            use_ssl=True,
+            verify=False
         )
         self.bucket_name = settings.BUCKET_NAME
     
