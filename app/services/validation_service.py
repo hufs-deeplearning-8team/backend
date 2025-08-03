@@ -274,7 +274,7 @@ class ValidationService:
             # UUID로 검증 레코드 조회
             query = (
                 ValidationRecord.__table__.select()
-                .where(ValidationRecord.uuid.collate('latin1_swedish_ci') == validation_uuid)
+                .where(ValidationRecord.uuid.collate('utf8mb4_general_ci') == validation_uuid)
             )
             
             record = await database.fetch_one(query)
