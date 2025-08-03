@@ -23,7 +23,7 @@ class UserService:
             )
         
         # 이름 중복 체크
-        name_query = User.__table__.select().where(User.name == user_data.name)
+        name_query = User.__table__.select().where(User.name.collate('utf8mb4_general_ci') == user_data.name)
         existing_name = await database.fetch_one(name_query)
         if existing_name:
             raise HTTPException(
@@ -33,7 +33,7 @@ class UserService:
             )
 
         # 이메일 중복 체크
-        email_query = User.__table__.select().where(User.email == user_data.email)
+        email_query = User.__table__.select().where(User.email.collate('utf8mb4_general_ci') == user_data.email)
         existing_email = await database.fetch_one(email_query)
         if existing_email:
             raise HTTPException(
@@ -55,7 +55,7 @@ class UserService:
     
     async def authenticate_user(self, login_data: UserLogin) -> TokenResponse:
         # 사용자 조회
-        query = User.__table__.select().where(User.email == login_data.email)
+        query = User.__table__.select().where(User.email.collate('utf8mb4_general_ci') == login_data.email)
         db_user = await database.fetch_one(query)
         
         if not db_user:

@@ -12,20 +12,10 @@ class StorageService:
     def __init__(self):
         self.s3_client = boto3.client(
             's3',
-            endpoint_url=settings.AWS_S3_ENDPOINT,
             aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
             aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-            config=Config(
-                signature_version='s3v4',
-                s3={
-                    'addressing_style': 'path',
-                    'use_ssl': True,
-                    'verify': False
-                }
-            ),
             region_name=settings.AWS_REGION_NAME,
-            use_ssl=True,
-            verify=False
+            config=Config(signature_version='s3v4')
         )
         self.bucket_name = settings.BUCKET_NAME
     
@@ -38,14 +28,9 @@ class StorageService:
                 s3_path
             )
         except Exception as e:
-            if "XMinioStorageFull" in str(e) or "Storage backend has reached its minimum free drive threshold" in str(e):
-                raise HTTPException(
-                    status_code=status.HTTP_507_INSUFFICIENT_STORAGE, 
-                    detail="저장 공간이 부족합니다. 관리자에게 문의하세요"
-                )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                detail=f"파일 업로드 중 오류가 발생했습니다: {str(e)}"
+                detail=f"S3 파일 업로드 중 오류가 발생했습니다: {str(e)}"
             )
     
     async def upload_multiple_files(self, file_content: bytes, s3_paths: List[str]) -> None:
@@ -58,14 +43,9 @@ class StorageService:
                     path
                 )
         except Exception as e:
-            if "XMinioStorageFull" in str(e) or "Storage backend has reached its minimum free drive threshold" in str(e):
-                raise HTTPException(
-                    status_code=status.HTTP_507_INSUFFICIENT_STORAGE, 
-                    detail="저장 공간이 부족합니다. 관리자에게 문의하세요"
-                )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
-                detail=f"파일 업로드 중 오류가 발생했습니다: {str(e)}"
+                detail=f"S3 파일 업로드 중 오류가 발생했습니다: {str(e)}"
             )
     
     def get_image_paths(self, image_id: int) -> List[str]:

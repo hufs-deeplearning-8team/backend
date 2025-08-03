@@ -28,12 +28,9 @@ class Settings:
     REFRESH_TOKEN_EXPIRE_DAYS: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS"))
     
     # AWS S3 Settings
-    AWS_S3_ENDPOINT: Optional[str] = os.getenv("AWS_S3_ENDPOINT")  # 내부 업로드용
-    AWS_S3_OUTPUT_ENDPOINT: Optional[str] = os.getenv("AWS_S3_OUTPUT_ENDPOINT")  # 프론트엔드 접근용
     AWS_ACCESS_KEY_ID: Optional[str] = os.getenv("AWS_ACCESS_KEY_ID") 
     AWS_SECRET_ACCESS_KEY: Optional[str] = os.getenv("AWS_SECRET_ACCESS_KEY")
-    AWS_SIGNATURE_VERSION: str = os.getenv("AWS_SIGNATURE_VERSION")
-    AWS_REGION_NAME: str = os.getenv("AWS_REGION_NAME")
+    AWS_REGION_NAME: str = os.getenv("AWS_REGION_NAME", "ap-northeast-2")
     
     # S3 Bucket Settings
     BUCKET_NAME: str = os.getenv("BUCKET_NAME")
@@ -51,22 +48,18 @@ class Settings:
 
     @property
     def s3_url(self) -> str:
-        """내부 업로드용 S3 URL"""
-        return f"{self.AWS_S3_ENDPOINT}/{self.BUCKET_NAME}"
-    
-    @property
-    def s3_output_url(self) -> str:
-        """프론트엔드 접근용 S3 URL"""
-        output_endpoint = self.AWS_S3_OUTPUT_ENDPOINT or self.AWS_S3_ENDPOINT
-        return f"{output_endpoint}/{self.BUCKET_NAME}"
+        """AWS S3 버킷 URL"""
+        if not self.BUCKET_NAME or not self.AWS_REGION_NAME:
+            raise ValueError("BUCKET_NAME과 AWS_REGION_NAME이 설정되어야 합니다")
+        return f"https://{self.BUCKET_NAME}.s3.{self.AWS_REGION_NAME}.amazonaws.com"
     
     @property 
     def s3_image_dir(self) -> str:
-        return f"{self.s3_output_url}/{self.IMAGEDIR}"
+        return f"{self.s3_url}/{self.IMAGEDIR}"
     
     @property
     def s3_record_dir(self) -> str:
-        return f"{self.s3_output_url}/{self.RECORDDIR}"
+        return f"{self.s3_url}/{self.RECORDDIR}"
 
 
 settings = Settings()
