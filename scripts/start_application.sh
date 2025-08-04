@@ -20,6 +20,8 @@ echo "=== Environment Variables Debug ==="
 echo "AWS_ACCOUNT_ID: $AWS_ACCOUNT_ID"
 echo "ECR_REPOSITORY_NAME: $ECR_REPOSITORY_NAME"
 echo "DB_HOST: $DB_HOST"
+echo "BUCKET_NAME: $BUCKET_NAME"
+echo "AWS_REGION_NAME: $AWS_REGION_NAME"
 echo "ACCESS_TOKEN_EXPIRE_MINUTES: $ACCESS_TOKEN_EXPIRE_MINUTES"
 echo "JWT_SECRET_KEY: ${JWT_SECRET_KEY:0:10}..." 
 echo "==================================="
@@ -56,6 +58,9 @@ docker ps -a
 if ! docker ps | grep -q aegis-backend; then
     echo "=== Backend container logs ==="
     docker compose --profile app logs backend
+else
+    echo "=== Backend container environment check ==="
+    docker exec aegis-backend printenv | grep -E "(BUCKET_NAME|AWS_REGION_NAME)" || echo "Environment variables not found in container"
 fi
 
 if ! docker ps | grep -q aegis-nginx; then
