@@ -39,10 +39,10 @@ class Settings:
     AWS_REGION_NAME: str = os.getenv("AWS_REGION_NAME")
     
     # S3 Bucket Settings
-    BUCKET_NAME: str = os.getenv("BUCKET_NAME")
+    BUCKET_NAME: str = os.getenv("S3_DEPLOYMENT_BUCKET")
     IMAGEDIR: str = os.getenv("IMAGEDIR")
     RECORDDIR: str = os.getenv("RECORDDIR")
-
+    
     
     # File Upload Settings
     MAX_FILE_SIZE_MB: int = 10
