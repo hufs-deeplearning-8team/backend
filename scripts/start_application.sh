@@ -9,6 +9,9 @@ cd /home/ubuntu/deploy
 # Load environment variables from .env file
 if [ -f ".env" ]; then
     echo "Loading environment variables from .env file"
+    echo "=== .env file contents ==="
+    cat .env
+    echo "=========================="
     source .env
 else
     echo "ERROR: .env file not found"
@@ -20,7 +23,7 @@ echo "=== Environment Variables Debug ==="
 echo "AWS_ACCOUNT_ID: $AWS_ACCOUNT_ID"
 echo "ECR_REPOSITORY_NAME: $ECR_REPOSITORY_NAME"
 echo "DB_HOST: $DB_HOST"
-echo "BUCKET_NAME: $BUCKET_NAME"
+echo "S3_DEPLOYMENT_BUCKET: $S3_DEPLOYMENT_BUCKET"
 echo "AWS_REGION_NAME: $AWS_REGION_NAME"
 echo "ACCESS_TOKEN_EXPIRE_MINUTES: $ACCESS_TOKEN_EXPIRE_MINUTES"
 echo "JWT_SECRET_KEY: ${JWT_SECRET_KEY:0:10}..." 

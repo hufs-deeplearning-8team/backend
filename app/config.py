@@ -39,10 +39,11 @@ class Settings:
     AWS_REGION_NAME: str = os.getenv("AWS_REGION_NAME")
     
     # S3 Bucket Settings
-    BUCKET_NAME: str = os.getenv("S3_DEPLOYMENT_BUCKET")
+    S3_DEPLOYMENT_BUCKET: str = os.getenv("S3_DEPLOYMENT_BUCKET")
+    BUCKET_NAME: str = os.getenv("BUCKET_NAME")
     IMAGEDIR: str = os.getenv("IMAGEDIR")
     RECORDDIR: str = os.getenv("RECORDDIR")
-    
+
     
     # File Upload Settings
     MAX_FILE_SIZE_MB: int = 10
@@ -58,7 +59,6 @@ class Settings:
         if not self.BUCKET_NAME or not self.AWS_REGION_NAME:
             raise ValueError("BUCKET_NAME과 AWS_REGION_NAME이 설정되어야 합니다")
         return f"https://{self.BUCKET_NAME}.s3.{self.AWS_REGION_NAME}.amazonaws.com"
-    
     @property 
     def s3_image_dir(self) -> str:
         return f"{self.s3_url}/{self.IMAGEDIR}"
