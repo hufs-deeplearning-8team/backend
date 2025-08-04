@@ -7,11 +7,11 @@ load_dotenv()
 
 class Settings:
     # Database Settings
-    DB_USER: str = os.getenv("DB_USER", "")
-    DB_PASSWORD: str = os.getenv("DB_PASSWORD", "")
-    DB_HOST: str = os.getenv("DB_HOST", "localhost")
-    DB_PORT: str = os.getenv("DB_PORT", "3306")
-    DB_NAME: str = os.getenv("DB_NAME", "")
+    DB_USER: str = os.getenv("DB_USER")
+    DB_PASSWORD: str = os.getenv("DB_PASSWORD")
+    DB_HOST: str = os.getenv("DB_HOST")
+    DB_PORT: str = os.getenv("DB_PORT")
+    DB_NAME: str = os.getenv("DB_NAME")
     
     @property
     def async_database_url(self) -> str:
@@ -30,7 +30,7 @@ class Settings:
     # AWS S3 Settings
     AWS_ACCESS_KEY_ID: Optional[str] = os.getenv("AWS_ACCESS_KEY_ID") 
     AWS_SECRET_ACCESS_KEY: Optional[str] = os.getenv("AWS_SECRET_ACCESS_KEY")
-    AWS_REGION_NAME: str = os.getenv("AWS_REGION_NAME", "ap-northeast-2")
+    AWS_REGION_NAME: str = os.getenv("AWS_REGION_NAME")
     
     # S3 Bucket Settings
     BUCKET_NAME: str = os.getenv("BUCKET_NAME")
