@@ -117,3 +117,4 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{"image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest", "deployment_package": "s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/aegis-backend/deployment-${{ github.sha }}.zip", "sha": "${{ github.sha }}"}'
         fi
+        
