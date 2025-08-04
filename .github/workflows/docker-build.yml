@@ -87,7 +87,7 @@ jobs:
         DB_HOST: ${{ secrets.DB_HOST }}
         DB_PORT: ${{ secrets.DB_PORT }}
         DB_NAME: ${{ secrets.DB_NAME }}
-        S3_DEPLOYMENT_BUCKET: ${{ secrets.S3_DEPLOYMENT_BUCKET }}
+        BUCKET_NAME: ${{ secrets.BUCKET_NAME }}
         IMAGEDIR: ${{ secrets.IMAGEDIR }}
         RECORDDIR: ${{ secrets.RECORDDIR }}
         JWT_SECRET_KEY: ${{ secrets.JWT_SECRET_KEY }}

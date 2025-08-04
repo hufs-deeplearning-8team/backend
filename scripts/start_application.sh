@@ -6,6 +6,15 @@ echo "Starting Aegis backend application..."
 # Change to deploy directory
 cd /home/ubuntu/deploy
 
+# Load environment variables from .env file
+if [ -f ".env" ]; then
+    echo "Loading environment variables from .env file"
+    source .env
+else
+    echo "ERROR: .env file not found"
+    exit 1
+fi
+
 # Debug: Print environment variables
 echo "=== Environment Variables Debug ==="
 echo "AWS_ACCOUNT_ID: $AWS_ACCOUNT_ID"
