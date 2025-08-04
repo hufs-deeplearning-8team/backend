@@ -79,7 +79,7 @@ jobs:
       run: |
         aws deploy create-deployment \
           --application-name aegis-backend \
-          --deployment-group-name production \
+          --deployment-group-name aegis-prod \
           --s3-location bucket=${{ secrets.S3_DEPLOYMENT_BUCKET }},key=aegis-backend/deployment-${{ github.sha }}.zip,bundleType=zip \
           --region ${{ secrets.AWS_REGION }}
         
