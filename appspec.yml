@@ -13,25 +13,6 @@ hooks:
     - location: scripts/start_application.sh
       timeout: 300
       runas: root
-      environment:
-        AWS_ACCESS_KEY_ID: "#{AWS_ACCESS_KEY_ID}"
-        AWS_SECRET_ACCESS_KEY: "#{AWS_SECRET_ACCESS_KEY}"
-        AWS_REGION: "#{AWS_REGION}"
-        AWS_ACCOUNT_ID: "#{AWS_ACCOUNT_ID}"
-        ECR_REPOSITORY_NAME: "#{ECR_REPOSITORY_NAME}"
-        DB_USER: "#{DB_USER}"
-        DB_PASSWORD: "#{DB_PASSWORD}"
-        DB_HOST: "#{DB_HOST}"
-        DB_PORT: "#{DB_PORT}"
-        DB_NAME: "#{DB_NAME}"
-        JWT_SECRET_KEY: "#{JWT_SECRET_KEY}"
-        JWT_ALGORITHM: "#{JWT_ALGORITHM}"
-        ACCESS_TOKEN_EXPIRE_MINUTES: "#{ACCESS_TOKEN_EXPIRE_MINUTES}"
-        REFRESH_TOKEN_EXPIRE_DAYS: "#{REFRESH_TOKEN_EXPIRE_DAYS}"
-        BUCKET_NAME: "#{BUCKET_NAME}"
-        IMAGEDIR: "#{IMAGEDIR}"
-        RECORDDIR: "#{RECORDDIR}"
-        S3_DEPLOYMENT_BUCKET: "#{S3_DEPLOYMENT_BUCKET}"
   ApplicationStop:
     - location: scripts/stop_application.sh
       timeout: 300
