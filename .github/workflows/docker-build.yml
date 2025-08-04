@@ -103,7 +103,10 @@ jobs:
           --application-name ${{ secrets.CODEDEPLOY_APPLICATION_NAME }} \
           --deployment-group-name ${{ secrets.CODEDEPLOY_DEPLOYMENT_GROUP }} \
           --s3-location bucket=${{ secrets.S3_DEPLOYMENT_BUCKET }},key=aegis-backend/deployment-${{ github.sha }}.zip,bundleType=zip \
-          --region ${{ secrets.AWS_REGION_NAME }}
+          --region ${{ secrets.AWS_REGION_NAME }} || \
+        (echo "Deployment failed. Checking application existence..." && \
+         aws deploy list-applications --region ${{ secrets.AWS_REGION_NAME }} && \
+         aws deploy get-application --application-name ${{ secrets.CODEDEPLOY_APPLICATION_NAME }} --region ${{ secrets.AWS_REGION_NAME }})
         
     - name: Deploy notification
       if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
