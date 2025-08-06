@@ -6,7 +6,7 @@ import sqlalchemy
 
 from app.config import settings
 from app.db import database
-from app.models import Image
+from app.models import Image, ProtectionAlgorithm
 from app.schemas import BaseResponse
 from app.services.auth_service import auth_service
 from app.services.storage_service import storage_service
@@ -51,10 +51,20 @@ class ImageService:
             return filename[10:]  # "protected_" 길이만큼 제거
         return filename
     
-    async def upload_image(self, file: UploadFile, copyright: str, access_token: str) -> BaseResponse:
+    async def upload_image(self, file: UploadFile, copyright: str, protection_algorithm: str, access_token: str) -> BaseResponse:
         """이미지 업로드 처리"""
         user_id = self.auth_service.get_user_id_from_token(access_token)
         self.validate_file(file)
+        
+        # protection_algorithm 검증
+        try:
+            protection_enum = ProtectionAlgorithm(protection_algorithm)
+        except ValueError:
+            valid_algorithms = [alg.value for alg in ProtectionAlgorithm]
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"유효하지 않은 보호 알고리즘입니다. 사용 가능한 값: {valid_algorithms}"
+            )
         
         # 파일명 정리
         original_filename = self.clean_filename(file.filename)
@@ -66,7 +76,8 @@ class ImageService:
             .values(
                 user_id=int(user_id), 
                 copyright=copyright, 
-                filename=original_filename
+                filename=original_filename,
+                protection_algorithm=protection_enum
             )
             .returning(Image)
         )
@@ -121,6 +132,7 @@ class ImageService:
                     "image_id": image["id"],
                     "filename": image["filename"],
                     "copyright": image["copyright"],
+                    "protection_algorithm": image["protection_algorithm"],
                     "upload_time": image["time_created"].isoformat(),
                     "s3_paths": self.storage_service.get_image_urls(image["id"])
                 }

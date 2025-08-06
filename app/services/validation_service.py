@@ -10,7 +10,7 @@ import sqlalchemy
 
 from app.config import settings
 from app.db import database
-from app.models import ValidationRecord, Image
+from app.models import ValidationRecord, Image, ProtectionAlgorithm
 from app.schemas import BaseResponse, AIValidationResponse
 from app.services.auth_service import auth_service
 from app.services.image_service import ImageService
@@ -25,12 +25,39 @@ class ValidationService:
         self.image_service = ImageService()
         self.storage_service = storage_service
     
-    async def simulate_ai_validation(self, image_data: bytes, filename: str) -> AIValidationResponse:
+    async def simulate_ai_validation(self, image_data: bytes, filename: str, algorithm: str) -> AIValidationResponse:
         """AI 서버를 시뮬레이션하는 함수 (실제 구현 시 대체될 예정)"""
+        logger.info(f"Simulating AI validation with algorithm: {algorithm}")
+        
+        # TODO: 실제 AI 서버 요청 구현
+        # 실제 구현 시 다음과 같은 형태로 AI 서버에 요청
+        """
+        ai_request_payload = {
+            "image_base64": base64.b64encode(image_data).decode('utf-8'),
+            "filename": filename,
+            "validation_algorithm": algorithm,
+            "detection_mode": "watermark_detection",
+            "return_visualization": True
+        }
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{AI_SERVER_URL}/validate", 
+                json=ai_request_payload,
+                timeout=30.0
+            )
+            ai_result = response.json()
+        """
+        
         await asyncio.sleep(0.5)  # AI 처리 시간 시뮬레이션
         
-        # 가짜 데이터 생성
-        has_watermark = random.choice([True, False])
+        # 알고리즘별로 다른 결과 시뮬레이션
+        if algorithm == "EditGuard":
+            has_watermark = random.choice([True, True, False])  # 높은 감지율
+        elif algorithm == "OmniGuard":
+            has_watermark = random.choice([True, False, False])  # 중간 감지율
+        else:  # RobustWide
+            has_watermark = random.choice([True, False])  # 기본 감지율
         
         # 워터마크가 감지된 경우에만 실제 존재하는 이미지 ID 사용
         detected_id = None
@@ -59,12 +86,22 @@ class ValidationService:
             visualization_image_base64=visualization_image
         )
     
-    async def validate_image(self, file: UploadFile, access_token: str) -> BaseResponse:
+    async def validate_image(self, file: UploadFile, validation_algorithm: str, access_token: str) -> BaseResponse:
         """이미지 검증 처리"""
         user_id = self.auth_service.get_user_id_from_token(access_token)
         self.image_service.validate_file(file)
         
-        logger.info(f"User {user_id} started validation for file: {file.filename}")
+        # validation_algorithm 검증
+        try:
+            validation_enum = ProtectionAlgorithm(validation_algorithm)
+        except ValueError:
+            valid_algorithms = [alg.value for alg in ProtectionAlgorithm]
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"유효하지 않은 검증 알고리즘입니다. 사용 가능한 값: {valid_algorithms}"
+            )
+        
+        logger.info(f"User {user_id} started validation for file: {file.filename} with algorithm: {validation_algorithm}")
         
         try:
             # 파일 읽기
@@ -80,7 +117,7 @@ class ValidationService:
             
 
             # AI 서버 시뮬레이션 (실제로는 외부 AI 서버에 HTTP 요청)
-            ai_response = await self.simulate_ai_validation(contents, original_filename)
+            ai_response = await self.simulate_ai_validation(contents, original_filename, validation_algorithm)
             
             
             logger.info(f"AI validation result: watermark={ai_response.has_watermark}, modification_rate={ai_response.modification_rate}, detected_id={ai_response.detected_watermark_image_id}")
@@ -94,7 +131,8 @@ class ValidationService:
                 input_image_filename=original_filename,
                 has_watermark=ai_response.has_watermark,
                 detected_watermark_image_id=ai_response.detected_watermark_image_id,
-                modification_rate=ai_response.modification_rate
+                modification_rate=ai_response.modification_rate,
+                validation_algorithm=validation_enum
             ).returning(ValidationRecord)
 
 
@@ -170,6 +208,7 @@ class ValidationService:
                     "has_watermark": record["has_watermark"],
                     "detected_watermark_image_id": record["detected_watermark_image_id"],
                     "modification_rate": record["modification_rate"],
+                    "validation_algorithm": record["validation_algorithm"],
                     "validation_time": record["time_created"].isoformat()
                 })
             
@@ -293,6 +332,7 @@ class ValidationService:
                 "has_watermark": record["has_watermark"],
                 "detected_watermark_image_id": record["detected_watermark_image_id"],
                 "modification_rate": record["modification_rate"],
+                "validation_algorithm": record["validation_algorithm"],
                 "validation_time": record["time_created"].isoformat(),
                 "s3_path": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}"
             }

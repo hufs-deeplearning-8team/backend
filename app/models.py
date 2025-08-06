@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import Enum
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, Boolean, Float, Enum as SQLEnum
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Boolean, Float, Enum as SQLEnum
 from sqlalchemy.sql import func
 
 Base = declarative_base()
@@ -38,4 +38,5 @@ class ValidationRecord(Base):
     has_watermark = Column(Boolean, nullable=False, default=False)
     detected_watermark_image_id = Column(Integer, ForeignKey("image.id"), nullable=True)
     modification_rate = Column(Float, nullable=True)
+    validation_algorithm = Column(SQLEnum(ProtectionAlgorithm), nullable=True)
     time_created = Column(DateTime(timezone=True), server_default=func.now())

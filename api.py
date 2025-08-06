@@ -6,6 +6,7 @@ from app.schemas import BaseResponse, UserCreate, UserLogin
 from app.services.user_service import user_service
 from app.services.image_service import image_service
 from app.services.validation_service import validation_service
+from app.models import ProtectionAlgorithm
 
 
 
@@ -85,10 +86,11 @@ async def login(user: UserLogin):
 )
 async def upload(
     copyright: str = Form(..., description="저작권 정보", max_length=255),
+    protection_algorithm: str = Form(..., description="보호 알고리즘 (EditGuard, OmniGuard, RobustWide)"),
     file: UploadFile = File(..., description="업로드할 PNG 파일 (최대 10MB)"),
     access_token: str = Security(APIKeyHeader(name='access-token'))
 ):
-    return await image_service.upload_image(file, copyright, access_token)
+    return await image_service.upload_image(file, copyright, protection_algorithm, access_token)
 
 @router.post("/validate",
     summary="이미지 검증",
@@ -101,10 +103,11 @@ async def upload(
     }
 )
 async def validate(
+    validation_algorithm: str = Form(..., description="검증 알고리즘 (EditGuard, OmniGuard, RobustWide)"),
     file: UploadFile = File(..., description="검증할 PNG 파일"),
     access_token: str = Security(APIKeyHeader(name='access-token'))
 ):
-    return await validation_service.validate_image(file, access_token)
+    return await validation_service.validate_image(file, validation_algorithm, access_token)
 
 
 
@@ -230,4 +233,20 @@ async def test_s3_connection():
             "endpoint": image_service.storage_service.s3_client._endpoint.host,
             "bucket": image_service.storage_service.bucket_name
         }]
+    )
+
+@router.get("/protection-algorithms",
+    summary="보호 알고리즘 목록 조회",
+    description="사용 가능한 이미지 보호 알고리즘 목록을 조회합니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "보호 알고리즘 목록 조회 성공"}
+    }
+)
+async def get_protection_algorithms():
+    algorithms = [{"value": alg.value, "name": alg.value} for alg in ProtectionAlgorithm]
+    return BaseResponse(
+        success=True,
+        description="보호 알고리즘 목록을 조회했습니다.",
+        data=algorithms
     )
