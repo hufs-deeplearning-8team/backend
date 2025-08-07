@@ -7,7 +7,8 @@ on:
     branches: [ main ]
 
 env:
-  REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION_NAME }}.amazonaws.com
+  PRIVATE_REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION_NAME }}.amazonaws.com
+  PUBLIC_REGISTRY: ${{ secrets.ECR_PUBLIC_REPOSITORY_URL }}
   IMAGE_NAME: ${{ secrets.ECR_REPOSITORY_NAME }}
 
 jobs:
@@ -29,21 +30,29 @@ jobs:
         aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         aws-region: ${{ secrets.AWS_REGION_NAME }}
         
-    - name: Log in to Amazon ECR
+    - name: Log in to Amazon ECR Private
       if: github.event_name != 'pull_request'
       uses: aws-actions/amazon-ecr-login@v2
+      
+    - name: Log in to Amazon ECR Public
+      if: github.event_name != 'pull_request'
+      uses: aws-actions/amazon-ecr-login@v2
+      with:
+        registry-type: public
         
     - name: Debug environment variables
       run: |
-        echo "REGISTRY: ${{ env.REGISTRY }}"
+        echo "PRIVATE_REGISTRY: ${{ env.PRIVATE_REGISTRY }}"
+        echo "PUBLIC_REGISTRY: ${{ env.PUBLIC_REGISTRY }}"
         echo "IMAGE_NAME: ${{ env.IMAGE_NAME }}"
-        echo "Full image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
         
     - name: Extract metadata
       id: meta
       uses: docker/metadata-action@v5
       with:
-        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        images: |
+          ${{ env.PRIVATE_REGISTRY }}/${{ env.IMAGE_NAME }}
+          ${{ env.PUBLIC_REGISTRY }}
         tags: |
           type=raw,value=latest
           
@@ -117,12 +126,13 @@ jobs:
     - name: Deploy notification
       if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
       run: |
-        echo "🚀 New image pushed: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        echo "🚀 New image pushed to private: ${{ env.PRIVATE_REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        echo "🚀 New image pushed to public: ${{ env.PUBLIC_REGISTRY }}:latest"
         echo "📦 Deployment package uploaded: s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/${{ secrets.ECR_REPOSITORY_NAME }}/deployment-${{ github.sha }}.zip"
         echo "🚀 CodeDeploy deployment started for ${{ secrets.CODEDEPLOY_APPLICATION_NAME }}"
         # 원격 서버에 웹훅 또는 알림을 보낼 수 있습니다
         if [ -n "${{ secrets.DEPLOY_WEBHOOK_URL }}" ]; then
           curl -X POST "${{ secrets.DEPLOY_WEBHOOK_URL }}" \
             -H "Content-Type: application/json" \
-            -d '{"image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest", "deployment_package": "s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/${{ secrets.ECR_REPOSITORY_NAME }}/deployment-${{ github.sha }}.zip", "sha": "${{ github.sha }}"}'
+            -d '{"private_image": "${{ env.PRIVATE_REGISTRY }}/${{ env.IMAGE_NAME }}:latest", "public_image": "${{ env.PUBLIC_REGISTRY }}:latest", "deployment_package": "s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/${{ secrets.ECR_REPOSITORY_NAME }}/deployment-${{ github.sha }}.zip", "sha": "${{ github.sha }}"}'
         fi
