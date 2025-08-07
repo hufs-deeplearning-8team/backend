@@ -69,15 +69,16 @@ jobs:
         
         # Create .env file with secrets
 
-  
+      
         cat > deployment-package/deploy/.env << 'EOF'
-        ENVIRONMENT=production
         AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
         AWS_REGION_NAME=${{ secrets.AWS_REGION_NAME }}
         AWS_REGION=${{ secrets.AWS_REGION_NAME }}
         AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
+        ECR_REPOSITORY_ID=${{ secrets.AWS_ACCOUNT_ID }}
         ECR_REPOSITORY_NAME=${{ secrets.ECR_REPOSITORY_NAME }}
+        ECR_REGION=${{ secrets.AWS_REGION_NAME }}
         ECR_IMAGE_TAG=latest
         DB_USER=${{ secrets.DB_USER }}
         DB_PASSWORD=${{ secrets.DB_PASSWORD }}
@@ -85,6 +86,7 @@ jobs:
         DB_PORT=${{ secrets.DB_PORT }}
         DB_NAME=${{ secrets.DB_NAME }}
         S3_DEPLOYMENT_BUCKET=${{ secrets.S3_DEPLOYMENT_BUCKET }}
+        BUCKET_NAME=${{ secrets.S3_DEPLOYMENT_BUCKET }}
         IMAGEDIR=${{ secrets.IMAGEDIR }}
         RECORDDIR=${{ secrets.RECORDDIR }}
         JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
