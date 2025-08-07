@@ -103,3 +103,4 @@ DB_PORT = settings.DB_PORT
 DB_NAME = settings.DB_NAME
 ASYNC_DATABASE_URL = settings.async_database_url
 SYNC_DATABASE_URL = settings.sync_database_url 
+AI_IP = settings.AI_IP
