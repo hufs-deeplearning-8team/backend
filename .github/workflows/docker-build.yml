@@ -98,6 +98,7 @@ jobs:
         JWT_ALGORITHM=${{ secrets.JWT_ALGORITHM }}
         ACCESS_TOKEN_EXPIRE_MINUTES=${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}
         REFRESH_TOKEN_EXPIRE_DAYS=${{ secrets.REFRESH_TOKEN_EXPIRE_DAYS }}
+        AI_IP=${{ secrets.AI_IP }}
         EOF
                 
                 cd deployment-package
