@@ -1,7 +1,8 @@
 import logging
 from typing import List, Dict, Any
 import base64
-
+import numpy as np
+import galois
 from fastapi import HTTPException, status, UploadFile
 import sqlalchemy
 import httpx
@@ -125,11 +126,26 @@ class ImageService:
         try:
             # 이미지를 base64로 인코딩
             image_b64 = base64.b64encode(image_content).decode('utf-8')
+
+            # id 인코딩
+            import galois
+            from np import numpy
+            
+            n = 63
+            t = 4
+            d = 2 * t + 1
+            bch = galois.BCH(n, d=d)
+            image_id_bit = f"{image_id:039b}"
+            image_id_bit_array = np.array([int(bit) for bit in image_id_bit])
+            codeword_array = bch.encode(image_id_bit_array)
+            codeword_string = "".join(str(bit) for bit in codeword_array)+'0'
+
+
             
             # AI 서버로 전송할 데이터 구성
             payload = {
                 "image": image_b64,
-                "bit_input": f"{image_id:064b}",
+                "bit_input": f"{codeword_string}",
                 "model": model.value
             }
             
@@ -255,7 +271,6 @@ class ImageService:
             )
     
     async def _send_to_ai_server_for_verification(self, image_content: bytes, model: ProtectionAlgorithm) -> dict:
-        """AI 서버에 검증 요청을 보낸다"""
         try:
             # 이미지를 base64로 인코딩
             image_b64 = base64.b64encode(image_content).decode('utf-8')
@@ -290,12 +305,33 @@ class ImageService:
                 
                 # 응답 데이터 구조에 따라 안전하게 접근
                 data = response_data.get("data", {})
-                recovered_bit = data.get("recovered_bit", "0")
                 mask_data = data.get("mask", "")
-                
+                recovered_bit = data.get("recovered_bit", "0")
+
+               
+                # 1. BCH 파라미터 정의
+                # m=6에 해당 -> n = 2^6 - 1 = 63
+                n = 63
+                # 복구할 비트 수 (t=4로 설정)
+                t = 4
+                # 설계 거리 d 계산
+                d = 2 * t + 1
+                # 2. BCH 코드 생성
+                bch = galois.BCH(n, d=d)
+
+                logger.info(f"BCH 코드 생성 완료: n={n}, d={d}")
                 # recovered_bit를 이진 문자열을 정수로 변환
-                original_image_id = int(recovered_bit, 2) if recovered_bit else 0
-                
+                recovered_bit_array = np.array([int(bit) for bit in recovered_bit[0:-1]])
+                decoded_bit_array = bch.decode(recovered_bit_array, errors=True)
+                decoded_bit = "".join(str(bit) for bit in decoded_bit_array[0])
+                logger.info(f"Decoded bit: {decoded_bit}, type: {type(decoded_bit)}")
+                original_image_id = int(decoded_bit, 2)
+
+                logger.info(f"Recovered bit: {recovered_bit}, type: {type(recovered_bit)}")
+                logger.info(f"Original image ID: {original_image_id}, type: {type(original_image_id)}")
+                logger.info(f"Decoded bit array: {decoded_bit_array}, type: {type(decoded_bit_array)}") 
+
+
                 # mask 데이터에서 변조률 계산
                 calculated_tampering_rate = 0.0
                 if mask_data:
@@ -303,7 +339,6 @@ class ImageService:
                         # mask base64 디코딩해서 이미지로 변환
                         from PIL import Image as PILImage
                         import io
-                        import numpy as np
                         
                         mask_bytes = base64.b64decode(mask_data)
                         
