@@ -123,11 +123,26 @@ class ValidationService:
             verification_result = await self.image_service._send_to_ai_server_for_verification(contents, validation_enum)
             logger.info(f"AI 서버 검증 응답: {verification_result}")
             
+            # recovered_bit에서 복구된 image ID 검증
+            original_image_id = verification_result.get("original_image_id", None)
+            if original_image_id and original_image_id > 0:
+                # DB에서 해당 image ID가 존재하는지 확인
+                image_check_query = sqlalchemy.select(Image.id).where(Image.id == original_image_id)
+                existing_image = await database.fetch_one(image_check_query)
+                
+                if not existing_image:
+                    logger.error(f"복구된 image ID {original_image_id}가 DB에 존재하지 않습니다.")
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"검증 실패: 복구된 원본 이미지 ID({original_image_id})가 시스템에 존재하지 않습니다."
+                    )
+                logger.info(f"복구된 image ID {original_image_id} 존재 확인 완료")
+
             # AI 응답을 AIValidationResponse 형식으로 변환 (계산된 변조률 사용)
             calculated_rate = verification_result.get("tampering_rate", 0)  # 이미 계산된 값
             ai_response = AIValidationResponse(
                 has_watermark=calculated_rate > 0,
-                detected_watermark_image_id=verification_result.get("original_image_id", None),
+                detected_watermark_image_id=original_image_id,
                 modification_rate=calculated_rate,  # 계산된 변조률 사용
                 visualization_image_base64=verification_result.get("tampered_regions_mask", "")
             )
@@ -159,8 +174,25 @@ class ValidationService:
             try:
                 await self.storage_service.upload_file(contents, s3_record_path)
                 logger.info(f"Validation input image saved to S3: {s3_record_path}")
+                
+                # mask 이미지도 S3에 저장 및 원본과 합성
+                if ai_response.visualization_image_base64:
+                    mask_bytes = base64.b64decode(ai_response.visualization_image_base64)
+                    mask_s3_path = f"record/{validation_uuid}/mask.png"
+                    await self.storage_service.upload_file(mask_bytes, mask_s3_path)
+                    logger.info(f"Mask image saved to S3: {mask_s3_path}")
+                    
+                    # 원본 이미지와 mask를 합성한 이미지 생성
+                    try:
+                        combined_bytes = self._create_combined_image(contents, mask_bytes)
+                        combined_s3_path = f"record/{validation_uuid}/combined.png"
+                        await self.storage_service.upload_file(combined_bytes, combined_s3_path)
+                        logger.info(f"Combined image saved to S3: {combined_s3_path}")
+                    except Exception as combine_error:
+                        logger.error(f"Failed to create combined image: {str(combine_error)}")
+                    
             except Exception as s3_error:
-                logger.error(f"Failed to save validation image to S3: {str(s3_error)}")
+                logger.error(f"Failed to save validation images to S3: {str(s3_error)}")
                 # S3 저장 실패해도 검증은 계속 진행
             
             # 응답 데이터 구성
@@ -222,7 +254,9 @@ class ValidationService:
                     "detected_watermark_image_id": record["detected_watermark_image_id"],
                     "modification_rate": record["modification_rate"],
                     "validation_algorithm": record["validation_algorithm"],
-                    "validation_time": record["time_created"].isoformat()
+                    "validation_time": record["time_created"].isoformat(),
+                    "s3_validation_image_url": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
+                    "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
                 })
             
             logger.info(f"Retrieved {len(history_data)} validation records for user {user_id}")
@@ -285,7 +319,8 @@ class ValidationService:
                     "detected_watermark_image_id": record["detected_watermark_image_id"],
                     "modification_rate": record["modification_rate"],
                     "validation_time": record["time_created"].isoformat(),
-                    "s3_validation_image_url": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}"
+                    "s3_validation_image_url": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
+                    "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
                 }
                 validation_history.append(validation_data)
             
@@ -347,7 +382,8 @@ class ValidationService:
                 "modification_rate": record["modification_rate"],
                 "validation_algorithm": record["validation_algorithm"],
                 "validation_time": record["time_created"].isoformat(),
-                "s3_path": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}"
+                "s3_path": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
+                "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
             }
             
             logger.info(f"Retrieved validation record: {validation_uuid}")
@@ -399,6 +435,7 @@ class ValidationService:
                 "detected_watermark_image_id": record["detected_watermark_image_id"],
                 "modification_rate": record["modification_rate"],
                 "validation_time": record["time_created"].isoformat(),
+                "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
             }
             
             logger.info(f"Retrieved validation record ID: {record_id}")
@@ -448,7 +485,8 @@ class ValidationService:
                     "detected_watermark_image_id": record["detected_watermark_image_id"],
                     "modification_rate": record["modification_rate"],
                     "validation_time": record["time_created"].isoformat(),
-                    "s3_path": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}"
+                    "s3_path": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
+                    "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
                 }
                 records_data.append(record_data)
             

@@ -306,7 +306,13 @@ class ImageService:
                         import numpy as np
                         
                         mask_bytes = base64.b64decode(mask_data)
+                        
+                        logger.info(f"Mask 바이트 크기: {len(mask_bytes)}")
+                        logger.info(f"Mask base64 처음 100자: {mask_data[:100]}...")
+                        
+                        # PIL로 이미지 열기 시도
                         mask_image = PILImage.open(io.BytesIO(mask_bytes))
+                        logger.info(f"Mask 이미지 모드: {mask_image.mode}, 크기: {mask_image.size}")
                         
                         # grayscale로 변환 (1과 0의 마스크이므로)
                         if mask_image.mode != 'L':

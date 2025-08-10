@@ -81,6 +81,7 @@ async def login(user: UserLogin):
         500: {"description": "S3 업로드 실패"}
     }
 )
+
 async def upload(
     copyright: str = Form(..., description="저작권 정보", max_length=255),
     protection_algorithm: str = Form(..., description="보호 알고리즘 (EditGuard, OmniGuard, RobustWide)"),
