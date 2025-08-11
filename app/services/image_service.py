@@ -128,8 +128,8 @@ class ImageService:
             image_b64 = base64.b64encode(image_content).decode('utf-8')
 
             # id 인코딩
-            import galois
-            from np import numpy
+            
+            
             
             n = 63
             t = 4

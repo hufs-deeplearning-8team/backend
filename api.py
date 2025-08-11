@@ -7,7 +7,6 @@ from app.services.user_service import user_service
 from app.services.image_service import image_service
 from app.services.validation_service import validation_service
 from app.models import ProtectionAlgorithm
-import numpy as np
 
 
 router = APIRouter()
