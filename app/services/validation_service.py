@@ -745,4 +745,156 @@ class ValidationService:
             return original_bytes
 
 
+    async def get_validation_record_by_uuid_public(self, validation_uuid: str) -> BaseResponse:
+        """UUID로 검증 레코드 조회 (인증 불필요)"""
+        logger.info(f"Public request for validation record with UUID: {validation_uuid}")
+        
+        try:
+            # UUID로 검증 레코드 조회
+            query = (
+                ValidationRecord.__table__.select()
+                .where(ValidationRecord.uuid.collate('utf8mb4_general_ci') == validation_uuid)
+            )
+            
+            record = await database.fetch_one(query)
+            
+            if not record:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="검증 레코드를 찾을 수 없습니다."
+                )
+            
+            # 응답 데이터 구성
+            record_data = {
+                "validation_id": record["uuid"],
+                "record_id": record["id"],
+                "user_id": record["user_id"],
+                "input_filename": record["input_image_filename"],
+                "has_watermark": record["has_watermark"],
+                "detected_watermark_image_id": record["detected_watermark_image_id"],
+                "modification_rate": record["modification_rate"],
+                "validation_algorithm": record["validation_algorithm"],
+                "validation_time": record["time_created"].isoformat(),
+                "s3_path": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
+                "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
+            }
+            
+            logger.info(f"Public retrieved validation record: {validation_uuid}")
+            
+            return BaseResponse(
+                success=True,
+                description="검증 레코드를 조회했습니다.",
+                data=[record_data]
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to retrieve validation record by UUID {validation_uuid}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"검증 레코드 조회 중 오류가 발생했습니다: {str(e)}"
+            )
+    
+    async def get_validation_record_by_id_public(self, record_id: int) -> BaseResponse:
+        """ID로 검증 레코드 조회 (인증 불필요)"""
+        logger.info(f"Public request for validation record with ID: {record_id}")
+        
+        try:
+            # ID로 검증 레코드 조회
+            query = (
+                ValidationRecord.__table__.select()
+                .where(ValidationRecord.id == record_id)
+            )
+            
+            record = await database.fetch_one(query)
+            
+            if not record:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="검증 레코드를 찾을 수 없습니다."
+                )
+            
+            # 응답 데이터 구성
+            record_data = {
+                "validation_id": record["uuid"],
+                "record_id": record["id"],
+                "user_id": record["user_id"],
+                "input_filename": record["input_image_filename"],
+                "s3_path": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
+                "has_watermark": record["has_watermark"],
+                "detected_watermark_image_id": record["detected_watermark_image_id"],
+                "modification_rate": record["modification_rate"],
+                "validation_algorithm": record["validation_algorithm"],
+                "validation_time": record["time_created"].isoformat(),
+                "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
+            }
+            
+            logger.info(f"Public retrieved validation record ID: {record_id}")
+            
+            return BaseResponse(
+                success=True,
+                description="검증 레코드를 조회했습니다.",
+                data=[record_data]
+            )
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to retrieve validation record by ID {record_id}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"검증 레코드 조회 중 오류가 발생했습니다: {str(e)}"
+            )
+    
+    async def get_validation_records_by_user_id_public(self, target_user_id: int, limit: int = 20, offset: int = 0) -> BaseResponse:
+        """User ID로 검증 레코드 목록 조회 (인증 불필요)"""
+        logger.info(f"Public request for validation records for user {target_user_id} (limit={limit}, offset={offset})")
+        
+        try:
+            # User ID로 검증 레코드 목록 조회
+            query = (
+                ValidationRecord.__table__.select()
+                .where(ValidationRecord.user_id == target_user_id)
+                .order_by(ValidationRecord.time_created.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+            
+            records = await database.fetch_all(query)
+            
+            # 응답 데이터 구성
+            records_data = []
+            for record in records:
+                record_data = {
+                    "validation_id": record["uuid"],
+                    "record_id": record["id"],
+                    "user_id": record["user_id"],
+                    "input_filename": record["input_image_filename"],
+                    "has_watermark": record["has_watermark"],
+                    "detected_watermark_image_id": record["detected_watermark_image_id"],
+                    "modification_rate": record["modification_rate"],
+                    "validation_algorithm": record["validation_algorithm"],
+                    "validation_time": record["time_created"].isoformat(),
+                    "s3_path": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
+                    "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
+                }
+                records_data.append(record_data)
+            
+            logger.info(f"Public retrieved {len(records_data)} validation records for user {target_user_id}")
+            
+            return BaseResponse(
+                success=True,
+                description=f"사용자 {target_user_id}의 {len(records_data)}개 검증 레코드를 조회했습니다.",
+                data=records_data
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve validation records for user {target_user_id}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"검증 레코드 조회 중 오류가 발생했습니다: {str(e)}"
+            )
+
+
 validation_service = ValidationService()

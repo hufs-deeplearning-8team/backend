@@ -126,52 +126,42 @@ async def get_validation_history(
 
 @router.get("/validation-record/uuid/{validation_uuid}",
     summary="UUID로 검증 레코드 조회",
-    description="UUID를 사용하여 특정 검증 레코드를 조회합니다.",
+    description="UUID를 사용하여 특정 검증 레코드를 조회합니다. (인증 불필요)",
     response_model=BaseResponse,
     responses={
         200: {"description": "검증 레코드 조회 성공"},
-        404: {"description": "검증 레코드를 찾을 수 없음"},
-        401: {"description": "유효하지 않은 토큰"}
+        404: {"description": "검증 레코드를 찾을 수 없음"}
     }
 )
-async def get_validation_record_by_uuid(
-    validation_uuid: str,
-    access_token: str = Security(APIKeyHeader(name='access-token'))
-):
-    return await validation_service.get_validation_record_by_uuid(validation_uuid, access_token)
+async def get_validation_record_by_uuid(validation_uuid: str):
+    return await validation_service.get_validation_record_by_uuid_public(validation_uuid)
 
 @router.get("/validation-record/id/{record_id}",
     summary="ID로 검증 레코드 조회",
-    description="레코드 ID를 사용하여 특정 검증 레코드를 조회합니다.",
+    description="레코드 ID를 사용하여 특정 검증 레코드를 조회합니다. (인증 불필요)",
     response_model=BaseResponse,
     responses={
         200: {"description": "검증 레코드 조회 성공"},
-        404: {"description": "검증 레코드를 찾을 수 없음"},
-        401: {"description": "유효하지 않은 토큰"}
+        404: {"description": "검증 레코드를 찾을 수 없음"}
     }
 )
-async def get_validation_record_by_id(
-    record_id: int,
-    access_token: str = Security(APIKeyHeader(name='access-token'))
-):
-    return await validation_service.get_validation_record_by_id(record_id, access_token)
+async def get_validation_record_by_id(record_id: int):
+    return await validation_service.get_validation_record_by_id_public(record_id)
 
 @router.get("/validation-records/user/{target_user_id}",
     summary="User ID로 검증 레코드 목록 조회",
-    description="특정 사용자의 모든 검증 레코드를 조회합니다.",
+    description="특정 사용자의 모든 검증 레코드를 조회합니다. (인증 불필요)",
     response_model=BaseResponse,
     responses={
-        200: {"description": "검증 레코드 목록 조회 성공"},
-        401: {"description": "유효하지 않은 토큰"}
+        200: {"description": "검증 레코드 목록 조회 성공"}
     }
 )
 async def get_validation_records_by_user_id(
     target_user_id: int,
-    access_token: str = Security(APIKeyHeader(name='access-token')),
     limit: int = 20,
     offset: int = 0
 ):
-    return await validation_service.get_validation_records_by_user_id(target_user_id, access_token, limit, offset)
+    return await validation_service.get_validation_records_by_user_id_public(target_user_id, limit, offset)
 
 @router.get("/images",
     summary="내가 업로드한 이미지 목록 조회",
