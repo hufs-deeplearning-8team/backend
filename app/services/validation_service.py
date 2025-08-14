@@ -217,7 +217,7 @@ class ValidationService:
                 else:
                     # mask가 없는 경우 (변조되지 않은 경우)
                     if validation_enum == ProtectionAlgorithm.RobustWide:
-                        logger.info(f"RobustWide: No tampering detected, no mask generated")
+                        logger.info(f"RobustWide: No tampering detected, empty mask generated")
                     else:
                         logger.info(f"AI server: No mask data provided")
                     
@@ -637,6 +637,25 @@ class ValidationService:
         
         return base64.b64encode(mask_buffer.getvalue()).decode('utf-8')
     
+    def _create_empty_mask(self) -> str:
+        """빈 마스크 이미지 생성 (변조가 없는 경우)"""
+        import numpy as np
+        import base64
+        import io
+        from PIL import Image as PILImage
+        
+        # 기본 크기의 빈 마스크 생성 (512x512)
+        default_size = (512, 512)
+        mask_image = np.zeros((*default_size, 4), dtype=np.uint8)
+        mask_image[:, :] = self.NORMAL_COLOR  # 모든 픽셀을 투명으로 설정
+        
+        # PIL 이미지로 변환 후 base64 인코딩
+        mask_pil = PILImage.fromarray(mask_image, mode='RGBA')
+        mask_buffer = io.BytesIO()
+        mask_pil.save(mask_buffer, format='PNG')
+        
+        return base64.b64encode(mask_buffer.getvalue()).decode('utf-8')
+    
     async def _process_robustwide_validation(self, input_image_bytes: bytes, original_image_id: int, verification_result: dict) -> None:
         """
         RobustWide 모델 검증 처리
@@ -667,9 +686,11 @@ class ValidationService:
         """검증 결과 업데이트"""
         if tampering_rate == 0.0:
             logger.info(f"RobustWide: 입력 이미지와 원본 이미지(ID: {original_image_id}) 일치 - 변조 없음")
+            # 변조가 없는 경우에도 빈 마스크 이미지 생성
+            empty_mask_data = self._create_empty_mask()
             verification_result.update({
                 "tampering_rate": 0.0,
-                "tampered_regions_mask": ""
+                "tampered_regions_mask": empty_mask_data
             })
         else:
             logger.info(f"RobustWide: 변조 감지 - 변조률: {tampering_rate:.2f}% (원본 ID: {original_image_id})")

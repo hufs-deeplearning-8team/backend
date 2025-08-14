@@ -7,9 +7,9 @@ from sqlalchemy.sql import func
 Base = declarative_base()
 
 class ProtectionAlgorithm(Enum):
+    RobustWide = "RobustWide"
     EditGuard = "EditGuard"
     OmniGuard = "OmniGuard"
-    RobustWide = "RobustWide"
 
 class User(Base):
     __tablename__ = "user"
