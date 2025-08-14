@@ -125,6 +125,8 @@ class ValidationService:
             
             # recovered_bit에서 복구된 image ID 검증
             original_image_id = verification_result.get("original_image_id", None)
+            logger.info(f"검증 알고리즘: {validation_enum}, 복구된 이미지 ID: {original_image_id}")
+            
             if original_image_id and original_image_id > 0:
                 # DB에서 해당 image ID가 존재하는지 확인
                 image_check_query = sqlalchemy.select(Image.id).where(Image.id == original_image_id)
@@ -137,14 +139,31 @@ class ValidationService:
                         detail=f"검증 실패: 복구된 원본 이미지 ID({original_image_id})가 시스템에 존재하지 않습니다."
                     )
                 logger.info(f"복구된 image ID {original_image_id} 존재 확인 완료")
+                
+                # RobustWide 모델 특별 처리: 픽셀 비교 기반 마스크 생성
+                if validation_enum == ProtectionAlgorithm.RobustWide:
+                    await self._process_robustwide_validation(
+                        contents, original_image_id, verification_result
+                    )
+            else:
+                # original_image_id가 없는 경우 처리
+                logger.info(f"original_image_id가 없습니다: {original_image_id}")
+                
+                # RobustWide의 경우 워터마크가 감지되지 않더라도 처리할 수 있도록 대안 로직 추가
+                if validation_enum == ProtectionAlgorithm.RobustWide:
+                    logger.info("RobustWide: original_image_id 없음. AI 서버 응답 기반으로 처리합니다.")
+                    # AI 서버에서 받은 기본 변조률과 mask 사용
+                    # (실제 프로덕션에서는 다른 로직 구현 가능)
 
-            # AI 응답을 AIValidationResponse 형식으로 변환 (계산된 변조률 사용)
-            calculated_rate = verification_result.get("tampering_rate", 0)  # 이미 계산된 값
+            # AI 응답을 AIValidationResponse 형식으로 변환
+            calculated_rate = verification_result.get("tampering_rate", 0)
+            mask_data = verification_result.get("tampered_regions_mask", "")
+            
             ai_response = AIValidationResponse(
                 has_watermark=calculated_rate > 0,
                 detected_watermark_image_id=original_image_id,
-                modification_rate=calculated_rate,  # 계산된 변조률 사용
-                visualization_image_base64=verification_result.get("tampered_regions_mask", "")
+                modification_rate=calculated_rate,
+                visualization_image_base64=mask_data
             )
             
             
@@ -175,12 +194,17 @@ class ValidationService:
                 await self.storage_service.upload_file(contents, s3_record_path)
                 logger.info(f"Validation input image saved to S3: {s3_record_path}")
                 
-                # mask 이미지도 S3에 저장 및 원본과 합성
+                # mask 이미지 S3에 저장
                 if ai_response.visualization_image_base64:
                     mask_bytes = base64.b64decode(ai_response.visualization_image_base64)
                     mask_s3_path = f"record/{validation_uuid}/mask.png"
                     await self.storage_service.upload_file(mask_bytes, mask_s3_path)
-                    logger.info(f"Mask image saved to S3: {mask_s3_path}")
+                    
+                    # 사용된 알고리즘에 따라 로그 메시지 구분
+                    if validation_enum == ProtectionAlgorithm.RobustWide:
+                        logger.info(f"RobustWide generated mask image saved to S3: {mask_s3_path}")
+                    else:
+                        logger.info(f"AI server mask image saved to S3: {mask_s3_path}")
                     
                     # 원본 이미지와 mask를 합성한 이미지 생성
                     try:
@@ -190,6 +214,12 @@ class ValidationService:
                         logger.info(f"Combined image saved to S3: {combined_s3_path}")
                     except Exception as combine_error:
                         logger.error(f"Failed to create combined image: {str(combine_error)}")
+                else:
+                    # mask가 없는 경우 (변조되지 않은 경우)
+                    if validation_enum == ProtectionAlgorithm.RobustWide:
+                        logger.info(f"RobustWide: No tampering detected, no mask generated")
+                    else:
+                        logger.info(f"AI server: No mask data provided")
                     
             except Exception as s3_error:
                 logger.error(f"Failed to save validation images to S3: {str(s3_error)}")
@@ -201,6 +231,7 @@ class ValidationService:
                 "has_watermark": ai_response.has_watermark,
                 "detected_watermark_image_id": ai_response.detected_watermark_image_id,
                 "modification_rate": ai_response.modification_rate,
+                "validation_algorithm": validation_enum.value,  # 사용된 검증 알고리즘
                 "input_filename": original_filename,
                 "validation_time": validation_record["time_created"].isoformat() if validation_record else None,
                 "input_image_base64": input_image_base64,
@@ -318,6 +349,7 @@ class ValidationService:
                     "has_watermark": record["has_watermark"],
                     "detected_watermark_image_id": record["detected_watermark_image_id"],
                     "modification_rate": record["modification_rate"],
+                    "validation_algorithm": record["validation_algorithm"],
                     "validation_time": record["time_created"].isoformat(),
                     "s3_validation_image_url": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
                     "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
@@ -484,6 +516,7 @@ class ValidationService:
                     "has_watermark": record["has_watermark"],
                     "detected_watermark_image_id": record["detected_watermark_image_id"],
                     "modification_rate": record["modification_rate"],
+                    "validation_algorithm": record["validation_algorithm"],
                     "validation_time": record["time_created"].isoformat(),
                     "s3_path": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
                     "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png"
@@ -504,6 +537,212 @@ class ValidationService:
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"검증 레코드 조회 중 오류가 발생했습니다: {str(e)}"
             )
+    
+    # RobustWide mask 생성 관련 상수
+    PIXEL_DIFF_THRESHOLD = 10  # RGB 값 차이 임계값
+    TAMPERED_COLOR = [255, 255, 255, 255]  # 하얀색, 불투명
+    NORMAL_COLOR = [0, 0, 0, 0]  # 투명
+    
+    async def _create_difference_mask(self, input_image_bytes: bytes, original_sr_h_bytes: bytes) -> tuple[str, float]:
+        """
+        RobustWide용 픽셀 차이 기반 마스크 생성
+        
+        Args:
+            input_image_bytes: 검증할 입력 이미지 바이트
+            original_sr_h_bytes: 원본 sr_h 이미지 바이트
+            
+        Returns:
+            tuple[str, float]: (base64 인코딩된 마스크 이미지, 변조률)
+        """
+        try:
+            # 이미지 로드 및 전처리
+            input_image, original_image = self._load_and_preprocess_images(
+                input_image_bytes, original_sr_h_bytes
+            )
+            
+            # 픽셀 차이 계산 및 변조 마스크 생성
+            tampered_mask = self._calculate_pixel_differences(input_image, original_image)
+            
+            # 변조률 계산
+            tampering_rate = self._calculate_tampering_rate(tampered_mask)
+            
+            # 마스크 이미지 생성 및 인코딩
+            mask_base64 = self._create_mask_image(tampered_mask)
+            
+            logger.info(f"RobustWide mask 생성 완료: 변조률 {tampering_rate:.2f}% "
+                       f"({np.sum(tampered_mask)}/{tampered_mask.size} 픽셀)")
+            
+            return mask_base64, tampering_rate
+            
+        except Exception as e:
+            logger.error(f"RobustWide mask 생성 중 오류: {str(e)}")
+            return "", 0.0
+    
+    def _load_and_preprocess_images(self, input_bytes: bytes, original_bytes: bytes) -> tuple:
+        """이미지 로드 및 전처리"""
+        import io
+        from PIL import Image as PILImage
+        
+        # 이미지 로드
+        input_image = PILImage.open(io.BytesIO(input_bytes))
+        original_image = PILImage.open(io.BytesIO(original_bytes))
+        
+        # 크기 맞춤
+        if input_image.size != original_image.size:
+            input_image = input_image.resize(original_image.size)
+        
+        # RGB 모드로 통일
+        input_image = input_image.convert('RGB')
+        original_image = original_image.convert('RGB')
+        
+        return input_image, original_image
+    
+    def _calculate_pixel_differences(self, input_image, original_image) -> np.ndarray:
+        """픽셀 차이 계산 및 변조 마스크 생성"""
+        import numpy as np
+        
+        # numpy 배열로 변환
+        input_array = np.array(input_image, dtype=np.float32)
+        original_array = np.array(original_image, dtype=np.float32)
+        
+        # RGB 차이의 유클리드 거리 계산
+        diff = input_array - original_array
+        diff_magnitude = np.sqrt(np.sum(diff ** 2, axis=2))
+        
+        # 임계값을 넘는 픽셀을 변조된 것으로 판단
+        return diff_magnitude > self.PIXEL_DIFF_THRESHOLD
+    
+    def _calculate_tampering_rate(self, tampered_mask: np.ndarray) -> float:
+        """변조률 계산"""
+        total_pixels = tampered_mask.size
+        tampered_pixels = np.sum(tampered_mask)
+        return (tampered_pixels / total_pixels * 100) if total_pixels > 0 else 0.0
+    
+    def _create_mask_image(self, tampered_mask: np.ndarray) -> str:
+        """마스크 이미지 생성 및 base64 인코딩"""
+        import numpy as np
+        import base64
+        import io
+        from PIL import Image as PILImage
+        
+        # RGBA 마스크 이미지 생성
+        mask_image = np.zeros((*tampered_mask.shape, 4), dtype=np.uint8)
+        mask_image[tampered_mask] = self.TAMPERED_COLOR  # 변조된 부분: 하얀색
+        mask_image[~tampered_mask] = self.NORMAL_COLOR   # 정상 부분: 투명
+        
+        # PIL 이미지로 변환 후 base64 인코딩
+        mask_pil = PILImage.fromarray(mask_image, mode='RGBA')
+        mask_buffer = io.BytesIO()
+        mask_pil.save(mask_buffer, format='PNG')
+        
+        return base64.b64encode(mask_buffer.getvalue()).decode('utf-8')
+    
+    async def _process_robustwide_validation(self, input_image_bytes: bytes, original_image_id: int, verification_result: dict) -> None:
+        """
+        RobustWide 모델 검증 처리
+        
+        Args:
+            input_image_bytes: 입력 이미지 바이트
+            original_image_id: 원본 이미지 ID
+            verification_result: 검증 결과 딕셔너리 (수정됨)
+        """
+        try:
+            # 원본 sr_h 이미지 다운로드
+            original_sr_h_path = f"image/{original_image_id}/sr_h.png"
+            original_sr_h_bytes = await self.storage_service.download_file(original_sr_h_path)
+            
+            # 픽셀 비교 기반 마스크 및 변조률 생성
+            mask_data, tampering_rate = await self._create_difference_mask(
+                input_image_bytes, original_sr_h_bytes
+            )
+            
+            # 결과 업데이트
+            self._update_verification_result(verification_result, mask_data, tampering_rate, original_image_id)
+            
+        except Exception as error:
+            logger.warning(f"RobustWide 검증 처리 중 오류: {str(error)}. 기존 AI 서버 결과 유지")
+            # 오류 발생 시 기존 AI 서버 결과 그대로 사용
+    
+    def _update_verification_result(self, verification_result: dict, mask_data: str, tampering_rate: float, original_image_id: int) -> None:
+        """검증 결과 업데이트"""
+        if tampering_rate == 0.0:
+            logger.info(f"RobustWide: 입력 이미지와 원본 이미지(ID: {original_image_id}) 일치 - 변조 없음")
+            verification_result.update({
+                "tampering_rate": 0.0,
+                "tampered_regions_mask": ""
+            })
+        else:
+            logger.info(f"RobustWide: 변조 감지 - 변조률: {tampering_rate:.2f}% (원본 ID: {original_image_id})")
+            verification_result.update({
+                "tampering_rate": tampering_rate,
+                "tampered_regions_mask": mask_data
+            })
+    
+    async def _compare_images(self, image1_bytes: bytes, image2_bytes: bytes) -> bool:
+        """두 이미지가 동일한지 비교"""
+        try:
+            from PIL import Image as PILImage
+            import io
+            
+            # 첫 번째 이미지 로드
+            image1 = PILImage.open(io.BytesIO(image1_bytes))
+            # 두 번째 이미지 로드
+            image2 = PILImage.open(io.BytesIO(image2_bytes))
+            
+            # 이미지 크기가 다르면 다른 이미지
+            if image1.size != image2.size:
+                return False
+            
+            # 이미지 모드가 다르면 RGB로 통일
+            if image1.mode != image2.mode:
+                image1 = image1.convert('RGB')
+                image2 = image2.convert('RGB')
+            
+            # numpy 배열로 변환하여 픽셀 단위 비교
+            import numpy as np
+            array1 = np.array(image1)
+            array2 = np.array(image2)
+            
+            # 모든 픽셀이 동일한지 확인
+            return np.array_equal(array1, array2)
+            
+        except Exception as e:
+            logger.error(f"이미지 비교 중 오류: {str(e)}")
+            return False
+    
+    def _create_combined_image(self, original_bytes: bytes, mask_bytes: bytes) -> bytes:
+        """원본 이미지와 mask를 합성한 이미지 생성"""
+        try:
+            from PIL import Image as PILImage
+            import io
+            
+            # 원본 이미지 로드
+            original_image = PILImage.open(io.BytesIO(original_bytes))
+            # mask 이미지 로드
+            mask_image = PILImage.open(io.BytesIO(mask_bytes))
+            
+            # 이미지 크기를 원본에 맞춤
+            if mask_image.size != original_image.size:
+                mask_image = mask_image.resize(original_image.size)
+            
+            # RGB 모드로 통일
+            if original_image.mode != 'RGB':
+                original_image = original_image.convert('RGB')
+            if mask_image.mode != 'RGB':
+                mask_image = mask_image.convert('RGB')
+            
+            # mask를 반투명하게 겹침
+            combined = PILImage.blend(original_image, mask_image, alpha=0.3)
+            
+            # bytes로 변환
+            output = io.BytesIO()
+            combined.save(output, format='PNG')
+            return output.getvalue()
+            
+        except Exception as e:
+            logger.error(f"이미지 합성 중 오류: {str(e)}")
+            # 실패 시 원본 이미지 반환
+            return original_bytes
 
 
 validation_service = ValidationService()
