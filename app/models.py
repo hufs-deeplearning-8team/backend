@@ -9,7 +9,6 @@ Base = declarative_base()
 class ProtectionAlgorithm(Enum):
     RobustWide = "RobustWide"
     EditGuard = "EditGuard"
-    OmniGuard = "OmniGuard"
 
 class User(Base):
     __tablename__ = "user"

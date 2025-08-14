@@ -47,7 +47,7 @@ class ImageService:
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, 
                 detail=f"파일 크기가 {settings.MAX_FILE_SIZE_MB}MB를 초과합니다"
             )
-    
+            
     def clean_filename(self, filename: str) -> str:
         """파일명에서 "protected_" prefix 제거"""
         if filename and filename.startswith("protected_"):
