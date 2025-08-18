@@ -6,13 +6,15 @@ import galois
 from fastapi import HTTPException, status, UploadFile
 import sqlalchemy
 import httpx
+from datetime import datetime
 
 from app.config import settings
 from app.db import database
-from app.models import Image, ProtectionAlgorithm
+from app.models import Image, ProtectionAlgorithm, User
 from app.schemas import BaseResponse
 from app.services.auth_service import auth_service
 from app.services.storage_service import storage_service
+from app.services.email_service import email_service
 
 logger = logging.getLogger(__name__)
 
@@ -76,49 +78,67 @@ class ImageService:
         # 파일 내용 읽기
         file_content = await file.read()
         
-        # DB에 이미지 정보 저장
-        query = (
-            sqlalchemy.insert(Image)
-            .values(
-                user_id=int(user_id), 
-                copyright=copyright, 
-                filename=original_filename,
-                protection_algorithm=protection_enum
+        # 트랜잭션으로 전체 과정 처리
+        async with database.transaction():
+            # 1. DB에 이미지 정보 저장 (트랜잭션 내부)
+            query = (
+                sqlalchemy.insert(Image)
+                .values(
+                    user_id=int(user_id), 
+                    copyright=copyright, 
+                    filename=original_filename,
+                    protection_algorithm=protection_enum
+                )
+                .returning(Image)
             )
-            .returning(Image)
-        )
-        
-        result = await database.fetch_one(query)
-        inserted_data = dict(result)
-        image_id = inserted_data["id"]
+            
+            result = await database.fetch_one(query)
+            inserted_data = dict(result)
+            image_id = inserted_data["id"]
 
-        logger.info(f"Image uploaded to DB: {inserted_data}")
+            logger.info(f"Image uploaded to DB: {inserted_data}")
+            
+            try:
+                # 2. AI 서버 요청
+                watermarked_image_content = await self._send_to_ai_server(file_content, image_id, protection_enum)
+                
+                # 3. S3에 원본(GT)과 워터마크(SRH) 이미지 업로드
+                # 파일명에서 확장자 제거
+                filename_without_ext = original_filename.rsplit('.', 1)[0] if '.' in original_filename else original_filename
+                gt_path = f"image/{image_id}/{filename_without_ext}_origi.png"
+                srh_path = f"image/{image_id}/{filename_without_ext}_wm.png"
+                
+                # S3 업로드 중 하나라도 실패하면 업로드된 파일들을 정리
+                uploaded_files = []
+                try:
+                    await self.storage_service.upload_file(file_content, gt_path)
+                    uploaded_files.append(gt_path)
+                    
+                    await self.storage_service.upload_file(watermarked_image_content, srh_path)
+                    uploaded_files.append(srh_path)
+                    
+                    logger.info(f"Files uploaded to S3: GT={gt_path}, SRH={srh_path}")
+                    
+                except Exception as s3_error:
+                    # 업로드 실패시 이미 업로드된 파일들 정리
+                    logger.error(f"S3 업로드 실패, 업로드된 파일 정리: {uploaded_files}")
+                    await self.storage_service.delete_multiple_files(uploaded_files)
+                    raise s3_error
+                
+            except Exception as e:
+                # AI 서버 또는 S3 업로드 실패 시 트랜잭션이 자동 롤백됨
+                logger.error(f"AI 서버 또는 S3 업로드 실패: {str(e)}")
+                logger.info(f"Transaction rolled back for image_id: {image_id}")
+                raise
         
-        try:
-            # 임시: AI 서버 코드 오류로 인해 원본 이미지 사용
-            watermarked_image_content = await self._send_to_ai_server(file_content, image_id, protection_enum)
-            # watermarked_image_content = file_content
-            
-            # S3에 원본(GT)과 워터마크(SRH) 이미지 업로드
-            gt_path = f"image/{image_id}/gt.png"
-            srh_path = f"image/{image_id}/sr_h.png"
-            
-            await self.storage_service.upload_file(file_content, gt_path)
-            await self.storage_service.upload_file(watermarked_image_content, srh_path)
-            logger.info(f"Files uploaded to S3: GT={gt_path}, SRH={srh_path}")
-            
-        except Exception as e:
-            # AI 서버 또는 S3 업로드 실패 시 DB에서 해당 레코드 삭제
-            logger.error(f"AI 서버 또는 S3 업로드 실패: {str(e)}")
-            delete_query = sqlalchemy.delete(Image).where(Image.id == image_id)
-            await database.execute(delete_query)
-            logger.info(f"Rolled back DB record for image_id: {image_id}")
-            raise
+        # 응답 데이터에 S3 URL 정보 추가
+        response_data = dict(inserted_data)
+        response_data["s3_paths"] = self.storage_service.get_image_urls(image_id, original_filename)
         
         return BaseResponse(
             success=True, 
             description="생성 성공", 
-            data=[inserted_data]
+            data=[response_data]
         )
     
     async def _send_to_ai_server(self, image_content: bytes, image_id:int, model:ProtectionAlgorithm) -> bytes:
@@ -214,7 +234,7 @@ class ImageService:
                     "copyright": image["copyright"],
                     "protection_algorithm": image["protection_algorithm"],
                     "upload_time": image["time_created"].isoformat(),
-                    "s3_paths": self.storage_service.get_image_urls(image["id"])
+                    "s3_paths": self.storage_service.get_image_urls(image["id"], image["filename"])
                 }
                 image_list.append(image_data)
             
@@ -256,6 +276,13 @@ class ImageService:
             
             # AI 서버로 검증 요청
             verification_result = await self._send_to_ai_server_for_verification(file_content, protection_enum)
+            
+            # 위변조가 검출된 경우 원본 이미지 소유자에게 이메일 발송
+            if verification_result.get("tampering_rate", 0) > 5.0:  # 5% 이상 변조시 알림
+                try:
+                    await self._send_forgery_notification(verification_result, file.filename)
+                except Exception as e:
+                    logger.error(f"위변조 알림 이메일 발송 실패: {str(e)}")
             
             return BaseResponse(
                 success=True,
@@ -396,6 +423,65 @@ class ImageService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"AI 서버 통신 중 오류가 발생했습니다: {str(e)}"
             )
+
+    async def _send_forgery_notification(self, verification_result: dict, detected_filename: str) -> None:
+        """위변조 검출시 원본 이미지 소유자에게 이메일 발송"""
+        try:
+            original_image_id = verification_result.get("original_image_id")
+            if not original_image_id:
+                logger.warning("원본 이미지 ID를 찾을 수 없어 알림 이메일을 발송하지 않습니다.")
+                return
+            
+            # 원본 이미지 정보 조회
+            image_query = (
+                sqlalchemy.select(Image.user_id, Image.filename, Image.time_created)
+                .where(Image.id == original_image_id)
+            )
+            image_record = await database.fetch_one(image_query)
+            
+            if not image_record:
+                logger.warning(f"원본 이미지 ID {original_image_id}를 DB에서 찾을 수 없습니다.")
+                return
+            
+            # 이미지 소유자 정보 조회
+            user_query = (
+                sqlalchemy.select(User.name, User.email)
+                .where(User.id == image_record["user_id"])
+            )
+            user_record = await database.fetch_one(user_query)
+            
+            if not user_record:
+                logger.warning(f"사용자 ID {image_record['user_id']}를 DB에서 찾을 수 없습니다.")
+                return
+            
+            # 위변조 보고서 URL 생성 (실제 구현시 S3 또는 웹사이트 URL로 수정)
+            report_url = f"{settings.s3_url}/reports/{original_image_id}"
+            
+            # 검출 정보 구성
+            detection_info = {
+                "detection_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "image_name": image_record["filename"],
+                "confidence_score": round(verification_result.get("tampering_rate", 0), 2),
+                "detected_filename": detected_filename,
+                "upload_time": image_record["time_created"].strftime("%Y-%m-%d %H:%M:%S")
+            }
+            
+            # 이메일 발송
+            success = await email_service.send_forgery_detection_email(
+                user_email=user_record["email"],
+                username=user_record["name"],
+                detection_info=detection_info,
+                report_url=report_url
+            )
+            
+            if success:
+                logger.info(f"위변조 알림 이메일이 {user_record['email']}로 발송되었습니다.")
+            else:
+                logger.error(f"위변조 알림 이메일 발송 실패: {user_record['email']}")
+                
+        except Exception as e:
+            logger.error(f"위변조 알림 처리 중 오류 발생: {str(e)}")
+            raise
 
 
 image_service = ImageService()

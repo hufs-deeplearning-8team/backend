@@ -1,4 +1,5 @@
 from typing import Optional, Dict, Any
+import logging
 
 from fastapi import HTTPException, status
 import sqlalchemy
@@ -7,6 +8,9 @@ from app.db import database
 from app.models import User
 from app.schemas import UserCreate, UserLogin, BaseResponse, TokenResponse, UserResponse
 from app.services.auth_service import auth_service
+from app.services.email_service import email_service
+
+logger = logging.getLogger(__name__)
 
 
 class UserService:
@@ -50,6 +54,13 @@ class UserService:
             password=hashed_password
         )
         await database.execute(insert_query)
+        
+        # 회원가입 완료 이메일 발송 (비동기, 실패해도 회원가입은 성공)
+        try:
+            await email_service.send_welcome_email(user_data.email, user_data.name)
+            logger.info(f"Welcome email sent to {user_data.email}")
+        except Exception as e:
+            logger.error(f"Failed to send welcome email to {user_data.email}: {str(e)}")
         
         return BaseResponse(success=True, description="회원가입 성공", data=["OK"])
     

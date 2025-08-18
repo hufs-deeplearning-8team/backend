@@ -37,6 +37,12 @@ echo "AWS_REGION_NAME: $AWS_REGION_NAME"
 echo "AWS_REGION: $AWS_REGION"
 echo "ACCESS_TOKEN_EXPIRE_MINUTES: $ACCESS_TOKEN_EXPIRE_MINUTES"
 echo "JWT_SECRET_KEY: ${JWT_SECRET_KEY:0:10}..." 
+echo "SMTP_HOST: $SMTP_HOST"
+echo "SMTP_PORT: $SMTP_PORT"
+echo "SMTP_USER: $SMTP_USER"
+echo "SMTP_PASSWORD: ${SMTP_PASSWORD:0:5}..."
+echo "EMAIL_FROM: $EMAIL_FROM"
+echo "EMAIL_FROM_NAME: $EMAIL_FROM_NAME"
 echo "==================================="
 
 # Use environment variables from GitHub Secrets
@@ -81,7 +87,7 @@ if ! docker ps | grep -q aegis-backend; then
     docker images | grep "$ECR_REPOSITORY_NAME" || echo "No images found for $ECR_REPOSITORY_NAME"
 else
     echo "=== Backend container environment check ==="
-    docker exec aegis-backend printenv | grep -E "(S3_DEPLOYMENT_BUCKET|AWS_REGION_NAME)" || echo "Environment variables not found in container"
+    docker exec aegis-backend printenv | grep -E "(S3_DEPLOYMENT_BUCKET|AWS_REGION_NAME|SMTP_HOST|EMAIL_FROM)" || echo "Environment variables not found in container"
 fi
 
 if ! docker ps | grep -q aegis-nginx; then
