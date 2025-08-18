@@ -80,7 +80,7 @@ class Settings:
     
     # Email Settings
     SMTP_HOST: str = os.getenv("SMTP_HOST")
-    SMTP_PORT: int = int(os.getenv("SMTP_PORT"))
+    SMTP_PORT: int = int(os.getenv("SMTP_PORT") or "587")
     SMTP_USER: str = os.getenv("SMTP_USER")
     SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD")
     SMTP_USE_TLS: bool = os.getenv("SMTP_USE_TLS", "true").lower() == "true"
