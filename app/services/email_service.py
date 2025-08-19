@@ -550,10 +550,11 @@ class EmailService:
                     font-size: 15px;
                     color: #888888;
                     font-weight: 500;
-                    padding: 12px 20px 12px 0;
-                    width: 120px;
-                    min-width: 120px;
+                    padding: 12px 30px 12px 0;
+                    width: 160px;
+                    min-width: 160px;
                     vertical-align: top;
+                    white-space: nowrap;
                 }}
                 .detail-value {{
                     display: table-cell;
