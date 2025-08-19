@@ -400,12 +400,17 @@ class EmailService:
         image_url: str = None,
         original_image_info: dict = None
     ) -> bool:
-        subject = f"🚨 [긴급] 이미지 #{original_image_info.get('image_id', 'N/A')} 위변조 검출 알림"
         
         detection_time = detection_info.get('detection_time', 'N/A')
         image_name = detection_info.get('image_name', 'N/A')
         confidence_score = detection_info.get('confidence_score', 'N/A')
         detection_method = detection_info.get('detection_method', 'AI 분석')
+        
+        # RobustWide인 경우 변조률 표시 처리
+        if detection_method == 'RobustWide':
+            confidence_display = '변조률 지원안함'
+        else:
+            confidence_display = f'{confidence_score}%'
         
         # 원본 이미지 정보
         original_info = original_image_info or {}
@@ -414,6 +419,9 @@ class EmailService:
         upload_time = original_info.get('upload_time', 'N/A')
         copyright_info = original_info.get('copyright_info', '저작권자 정보 없음')
         watermark_image_url = original_info.get('watermark_image_url', '')
+        
+        # 이메일 제목에 이미지 번호 포함
+        subject = f"🚨 [긴급] 이미지 #{original_image_id} 위변조 검출 알림"
         
         html_body = f"""
         <!DOCTYPE html>
@@ -532,39 +540,36 @@ class EmailService:
                     margin-bottom: 20px;
                     text-align: center;
                 }}
-                .details-grid {{
-                    display: table;
+                .details-table {{
                     width: 100%;
-                    border-spacing: 0;
+                    border-collapse: collapse;
+                    background: transparent;
                 }}
-                .detail-item {{
-                    display: table-row;
-                    padding: 12px 0;
+                .details-table tr {{
                     border-bottom: 1px solid #222222;
                 }}
-                .detail-item:last-child {{
+                .details-table tr:last-child {{
                     border-bottom: none;
                 }}
+                .details-table td {{
+                    padding: 16px 0;
+                    vertical-align: top;
+                    background: transparent;
+                }}
                 .detail-label {{
-                    display: table-cell;
-                    font-size: 15px;
+                    font-size: 13px;
                     color: #888888;
                     font-weight: 500;
-                    padding: 12px 30px 12px 0;
-                    width: 160px;
-                    min-width: 160px;
-                    vertical-align: top;
-                    white-space: nowrap;
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                    padding-bottom: 8px;
+                    display: block;
                 }}
                 .detail-value {{
-                    display: table-cell;
                     font-size: 15px;
                     color: #ffffff;
                     font-weight: 600;
                     line-height: 1.4;
-                    word-break: break-word;
-                    padding: 12px 0;
-                    vertical-align: top;
                 }}
                 .threat-high {{
                     color: #dc2626;
@@ -703,50 +708,63 @@ class EmailService:
                     
                     <div class="detection-details">
                         <h3 class="details-title">검출 상세 정보</h3>
-                        <div class="details-grid">
-                            <div class="detail-item">
-                                <span class="detail-label">검출 시간</span>
-                                <span class="detail-value">{detection_time}</span>
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">이미지 파일명</span>
-                                <span class="detail-value">{image_name}</span>
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">위변조 신뢰도</span>
-                                <span class="detail-value">
-                                    {"RobustWide는 변조률을 제공하지 않음" if detection_method == "RobustWide" else f"{confidence_score}%"}
-                                </span>
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">검출 방법</span>
-                                <span class="detail-value">{detection_method}</span>
-                            </div>
-                        </div>
+                        <table class="details-table">
+                            <tr>
+                                <td>
+                                    <span class="detail-label">검출 시간</span>
+                                    <span class="detail-value">{detection_time}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    <span class="detail-label">이미지 파일명</span>
+                                    <span class="detail-value">{image_name}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    <span class="detail-label">변조률</span>
+                                    <span class="detail-value threat-high">{confidence_display}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    <span class="detail-label">검출 방법</span>
+                                    <span class="detail-value">{detection_method}</span>
+                                </td>
+                            </tr>
+                            {"<tr><td style='padding-top: 24px; text-align: center;'><span class='detail-label' style='display: block; margin-bottom: 16px;'>검출된 위변조 이미지</span><img src='" + image_url + "' alt='검출된 위변조 이미지' style='max-width: 300px; height: auto; border-radius: 8px; border: 2px solid #dc2626; display: block; margin: 0 auto;'><p style='color: #888; font-size: 12px; margin-top: 8px;'>※ 위변조가 의심되는 이미지</p></td></tr>" if image_url else ""}
+                        </table>
                     </div>
-                    
-                    {"<div class='image-preview'><h4 style='color: #ffffff; margin-bottom: 16px;'>검출된 위변조 이미지</h4><img src='" + image_url + "' alt='검출된 위변조 이미지' style='max-width: 300px; height: auto; border-radius: 8px; border: 2px solid #dc2626; display: block; margin: 0 auto;'><p class='image-caption'>※ 위변조가 의심되는 이미지</p></div>" if image_url else ""}
                     
                     <div class="detection-details">
                         <h3 class="details-title">보호된 원본 이미지 정보</h3>
-                        <div class="details-grid">
-                            <div class="detail-item">
-                                <span class="detail-label">이미지 ID</span>
-                                <span class="detail-value">{original_image_id}</span>
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">원본 파일명</span>
-                                <span class="detail-value">{original_filename}</span>
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">업로드 시간</span>
-                                <span class="detail-value">{upload_time}</span>
-                            </div>
-                            <div class="detail-item">
-                                <span class="detail-label">저작권 정보</span>
-                                <span class="detail-value">{copyright_info}</span>
-                            </div>
-                        </div>
+                        <table class="details-table">
+                            <tr>
+                                <td>
+                                    <span class="detail-label">이미지 ID</span>
+                                    <span class="detail-value">{original_image_id}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    <span class="detail-label">원본 파일명</span>
+                                    <span class="detail-value">{original_filename}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    <span class="detail-label">업로드 시간</span>
+                                    <span class="detail-value">{upload_time}</span>
+                                </td>
+                            </tr>
+                            <tr>
+                                <td>
+                                    <span class="detail-label">저작권 정보</span>
+                                    <span class="detail-value">{copyright_info}</span>
+                                </td>
+                            </tr>
+                        </table>
                         
                         <div style="margin-top: 24px; text-align: center;">
                             <h4 style="color: #ffffff; margin-bottom: 16px;">워터마크 이미지</h4>
@@ -763,7 +781,7 @@ class EmailService:
                             <a href="{report_url}" class="btn-secondary">
                                 📊 상세 보고서 확인
                             </a>
-                            <a href="mailto:kisiaaegis@gmail.com" class="btn-secondary">
+                            <a href="mailto:kisiaaegis@gmail.com?subject=위변조%20검출%20문의&body=안녕하세요.%20위변조%20검출에%20관련하여%20문의드립니다." class="btn-secondary">
                                 💬 지원팀 문의
                             </a>
                         </div>
