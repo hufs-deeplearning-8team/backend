@@ -25,15 +25,6 @@ fi
 echo "🔧 Starting service with new image..."
 docker-compose up -d $SERVICE_NAME
 
-# 4. 헬스체크 (선택사항)
-echo "🏥 Performing health check..."
-sleep 10
-if curl -f http://localhost:8000/health > /dev/null 2>&1; then
-    echo "✅ Deployment successful! Service is healthy."
-else
-    echo "⚠️  Warning: Health check failed, but service might still be starting..."
-fi
-
 # 5. 사용하지 않는 이미지 정리
 echo "🧹 Cleaning up unused images..."
 docker image prune -f

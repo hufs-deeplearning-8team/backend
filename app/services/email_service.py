@@ -19,6 +19,43 @@ class EmailService:
         self.email_from = settings.EMAIL_FROM
         self.email_from_name = settings.EMAIL_FROM_NAME
 
+    async def check_email_service_status(self) -> dict:
+        """이메일 서비스 상태 확인"""
+        status = {
+            "email_configured": False,
+            "smtp_connection": False,
+            "error": None
+        }
+        
+        try:
+            # 이메일 설정 확인
+            if not all([self.smtp_host, self.smtp_port, self.smtp_user, self.smtp_password, self.email_from]):
+                status["error"] = "이메일 설정이 완전하지 않습니다"
+                logger.warning("❌ 이메일 설정 불완전")
+                return status
+            
+            status["email_configured"] = True
+            logger.info("✅ 이메일 설정 확인됨")
+            
+            # SMTP 연결 테스트
+            context = ssl.create_default_context()
+            server = smtplib.SMTP(self.smtp_host, self.smtp_port)
+            
+            if self.smtp_use_tls:
+                server.starttls(context=context)
+            
+            server.login(self.smtp_user, self.smtp_password)
+            server.quit()
+            
+            status["smtp_connection"] = True
+            logger.info("✅ SMTP 서버 연결 성공")
+            
+        except Exception as e:
+            status["error"] = str(e)
+            logger.error(f"❌ 이메일 서비스 확인 실패: {e}")
+        
+        return status
+
     async def send_email(
         self,
         to_email: str,

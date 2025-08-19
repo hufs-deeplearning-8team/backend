@@ -6,6 +6,7 @@ from app.schemas import BaseResponse, UserCreate, UserLogin
 from app.services.user_service import user_service
 from app.services.image_service import image_service
 from app.services.validation_service import validation_service
+from app.services.email_service import email_service
 from app.models import ProtectionAlgorithm
 
 
@@ -263,3 +264,57 @@ async def get_protection_algorithms():
         description="보호 알고리즘 목록을 조회했습니다.",
         data=algorithms
     )
+
+@router.post("/test-email",
+    summary="이메일 발송 테스트",
+    description="이메일 서비스를 테스트합니다. (권한 불필요)",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "이메일 발송 성공"},
+        400: {"description": "이메일 발송 실패"}
+    }
+)
+async def test_email(to_email: str = Form(...)):
+    try:
+        # 이메일 서비스 상태 확인
+        status = await email_service.check_email_service_status()
+        
+        if not status["smtp_connection"]:
+            return BaseResponse(
+                success=False,
+                description=f"이메일 서비스 연결 실패: {status.get('error', '알 수 없는 오류')}",
+                data=[status]
+            )
+        
+        # 테스트 이메일 발송
+        test_result = await email_service.send_email(
+            to_email=to_email,
+            subject="🧪 Aegis 백엔드 이메일 테스트",
+            body="""
+            <h2>이메일 테스트 성공!</h2>
+            <p>Aegis 백엔드에서 이메일을 성공적으로 발송했습니다.</p>
+            <p>현재 시간: {}</p>
+            """.format(str(__import__("datetime").datetime.now())),
+            is_html=True
+        )
+        
+        if test_result:
+            return BaseResponse(
+                success=True,
+                description="테스트 이메일 발송 성공",
+                data=[{"email_sent": True, "smtp_status": status}]
+            )
+        else:
+            return BaseResponse(
+                success=False,
+                description="이메일 발송 실패",
+                data=[{"email_sent": False, "smtp_status": status}]
+            )
+            
+    except Exception as e:
+        logger.error(f"이메일 테스트 중 오류: {e}")
+        return BaseResponse(
+            success=False,
+            description=f"이메일 테스트 중 오류 발생: {str(e)}",
+            data=[{"error": str(e)}]
+        )
