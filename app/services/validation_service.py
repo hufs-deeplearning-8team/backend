@@ -1312,5 +1312,740 @@ class ValidationService:
                 detail=f"통합 검증 요약 정보 조회 중 오류가 발생했습니다: {str(e)}"
             )
 
+    async def get_weekly_statistics(self, user_id: int, start_date: str, end_date: str) -> dict:
+        """주간 통계 데이터 수집"""
+        try:
+            from datetime import datetime
+            from app.models import Image
+            
+            start_dt = datetime.fromisoformat(start_date)
+            end_dt = datetime.fromisoformat(end_date)
+            
+            # 1. 기본 통계 (지난 주 데이터)
+            # 내가 검증한 레코드들
+            my_validation_query = (
+                ValidationRecord.__table__.select()
+                .where(
+                    sqlalchemy.and_(
+                        ValidationRecord.user_id == user_id,
+                        ValidationRecord.time_created >= start_dt,
+                        ValidationRecord.time_created <= end_dt
+                    )
+                )
+            )
+            my_validation_records = await database.fetch_all(my_validation_query)
+            
+            # 내 이미지가 검증된 레코드들
+            my_image_validation_query = (
+                ValidationRecord.__table__.select()
+                .select_from(
+                    ValidationRecord.__table__.join(
+                        Image.__table__, 
+                        ValidationRecord.detected_watermark_image_id == Image.id
+                    )
+                )
+                .where(
+                    sqlalchemy.and_(
+                        Image.user_id == user_id,
+                        ValidationRecord.user_id != user_id,
+                        ValidationRecord.time_created >= start_dt,
+                        ValidationRecord.time_created <= end_dt
+                    )
+                )
+            )
+            my_image_validation_records = await database.fetch_all(my_image_validation_query)
+            
+            # 2. 위변조 검출 통계
+            forgery_detected_count = 0
+            total_validations = 0
+            self_validations_count = 0
+            forgery_reports = []  # 위변조 검출된 레포트 정보
+            
+            for record in my_validation_records:
+                total_validations += 1
+                if record["has_watermark"] and record["modification_rate"] and record["modification_rate"] > 0:
+                    forgery_detected_count += 1
+                    forgery_reports.append({
+                        "validation_uuid": record["uuid"],
+                        "filename": record["input_image_filename"],
+                        "modification_rate": record["modification_rate"],
+                        "validation_time": record["time_created"].strftime("%Y-%m-%d %H:%M")
+                    })
+                
+                # 내가 검증했고 내 이미지인 경우
+                if record["detected_watermark_image_id"]:
+                    image_query = (
+                        Image.__table__.select()
+                        .where(Image.id == record["detected_watermark_image_id"])
+                    )
+                    image_record = await database.fetch_one(image_query)
+                    if image_record and image_record["user_id"] == user_id:
+                        self_validations_count += 1
+            
+            for record in my_image_validation_records:
+                if record["has_watermark"] and record["modification_rate"] and record["modification_rate"] > 0:
+                    forgery_detected_count += 1
+                    forgery_reports.append({
+                        "validation_uuid": record["uuid"],
+                        "filename": record["input_image_filename"],
+                        "modification_rate": record["modification_rate"],
+                        "validation_time": record["time_created"].strftime("%Y-%m-%d %H:%M")
+                    })
+            
+            # 최다 5개로 제한 (이메일 길이 제한)
+            # forgery_reports = forgery_reports[:5]
+            
+            # 위변조 검출율 계산
+            total_all_validations = total_validations + len(my_image_validation_records)
+            forgery_detection_rate = (forgery_detected_count / total_all_validations * 100) if total_all_validations > 0 else 0.0
+            
+            statistics = {
+                "my_validations_count": len(my_validation_records),
+                "my_image_validations_count": len(my_image_validation_records),
+                "self_validations_count": self_validations_count,
+                "total_validations_count": total_all_validations,
+                "forgery_detected_count": forgery_detected_count,
+                "forgery_detection_rate": forgery_detection_rate,
+                "forgery_reports": forgery_reports
+            }
+            
+            return statistics
+            
+        except Exception as e:
+            logger.error(f"Failed to get weekly statistics for user {user_id}: {str(e)}")
+            return {}
+
+    async def send_weekly_reports_to_all_users(self) -> dict:
+        """모든 사용자에게 주간 리포트 발송"""
+        from datetime import datetime, timedelta
+        from app.models import User
+        from app.services.email_service import email_service
+        
+        try:
+            # 오늘부터 7일 전까지 계산
+            today = datetime.now().date()
+            week_end = today  # 오늘
+            week_start = today - timedelta(days=6)  # 7일 전 (오늘 포함 7일)
+            
+            period_start = week_start.strftime('%Y-%m-%d')
+            period_end = week_end.strftime('%Y-%m-%d')
+            
+            logger.info(f"Sending weekly reports for period: {period_start} ~ {period_end}")
+            
+            # 모든 사용자 조회
+            users_query = User.__table__.select()
+            users = await database.fetch_all(users_query)
+            
+            success_count = 0
+            error_count = 0
+            
+            for user in users:
+                try:
+                    # 사용자별 주간 통계 수집
+                    statistics = await self.get_weekly_statistics(
+                        user["id"], 
+                        f"{period_start} 00:00:00",
+                        f"{period_end} 23:59:59"
+                    )
+                    
+                    # 활동이 있는 사용자만 이메일 발송
+                    if statistics.get("total_validations_count", 0) > 0:
+                        success = await email_service.send_weekly_statistics_email(
+                            user_email=user["email"],
+                            username=user["name"],
+                            statistics=statistics,
+                            period_start=period_start,
+                            period_end=period_end
+                        )
+                        
+                        if success:
+                            success_count += 1
+                            logger.info(f"Weekly report sent successfully to {user['email']}")
+                        else:
+                            error_count += 1
+                            logger.error(f"Failed to send weekly report to {user['email']}")
+                    else:
+                        logger.info(f"No activity for user {user['email']}, skipping email")
+                        
+                except Exception as e:
+                    error_count += 1
+                    logger.error(f"Error processing weekly report for user {user['email']}: {str(e)}")
+            
+            result = {
+                "success_count": success_count,
+                "error_count": error_count,
+                "total_users": len(users),
+                "period_start": period_start,
+                "period_end": period_end
+            }
+            
+            logger.info(f"Weekly report batch completed: {success_count} success, {error_count} errors")
+            return result
+            
+        except Exception as e:
+            logger.error(f"Failed to send weekly reports: {str(e)}")
+            return {
+                "success_count": 0,
+                "error_count": 0,
+                "total_users": 0,
+                "error": str(e)
+            }
+
+    async def send_individual_weekly_report(self, access_token: str) -> BaseResponse:
+        """개인 주간 리포트 이메일 발송"""
+        user_id = self.auth_service.get_user_id_from_token(access_token)
+        
+        try:
+            from datetime import datetime, timedelta
+            from app.models import User
+            from app.services.email_service import email_service
+            
+            # 사용자 정보 조회
+            user_query = User.__table__.select().where(User.id == int(user_id))
+            user = await database.fetch_one(user_query)
+            
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="사용자를 찾을 수 없습니다."
+                )
+            
+            # 오늘부터 7일 전까지 계산
+            today = datetime.now().date()
+            week_end = today  # 오늘
+            week_start = today - timedelta(days=6)  # 7일 전 (오늘 포함 7일)
+            
+            period_start = week_start.strftime('%Y-%m-%d')
+            period_end = week_end.strftime('%Y-%m-%d')
+            
+            logger.info(f"Sending individual weekly report to user {user_id} for period: {period_start} ~ {period_end}")
+            
+            # 개인 주간 통계 수집
+            statistics = await self.get_weekly_statistics(
+                int(user_id), 
+                f"{period_start} 00:00:00",
+                f"{period_end} 23:59:59"
+            )
+            
+            # 이메일 발송
+            success = await email_service.send_weekly_statistics_email(
+                user_email=user["email"],
+                username=user["name"],
+                statistics=statistics,
+                period_start=period_start,
+                period_end=period_end
+            )
+            
+            if success:
+                logger.info(f"Individual weekly report sent successfully to user {user_id}")
+                return BaseResponse(
+                    success=True,
+                    description="주간 리포트가 이메일로 발송되었습니다.",
+                    data=[{
+                        "period_start": period_start,
+                        "period_end": period_end,
+                        "email": user["email"],
+                        "statistics": statistics
+                    }]
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="이메일 발송에 실패했습니다."
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to send individual weekly report to user {user_id}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"주간 리포트 발송 중 오류가 발생했습니다: {str(e)}"
+            )
+
+    async def send_custom_period_report(self, access_token: str, start_date: str, end_date: str) -> BaseResponse:
+        """지정 기간 개인 리포트 이메일 발송"""
+        user_id = self.auth_service.get_user_id_from_token(access_token)
+        
+        try:
+            from datetime import datetime, timedelta
+            from app.models import User
+            from app.services.email_service import email_service
+            
+            # 날짜 형식 검증 및 변환
+            try:
+                start_dt = datetime.strptime(start_date, '%Y-%m-%d').date()
+                end_dt = datetime.strptime(end_date, '%Y-%m-%d').date()
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="날짜 형식이 올바르지 않습니다. YYYY-MM-DD 형식을 사용해주세요."
+                )
+            
+            # 날짜 유효성 검증
+            if start_dt > end_dt:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="시작 날짜는 종료 날짜보다 이전이어야 합니다."
+                )
+            
+            # 최대 90일 제한
+            if (end_dt - start_dt).days > 90:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="조회 기간은 최대 90일까지 가능합니다."
+                )
+            
+            # 미래 날짜 제한
+            today = datetime.now().date()
+            if end_dt > today:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="종료 날짜는 오늘 이전이어야 합니다."
+                )
+            
+            # 사용자 정보 조회
+            user_query = User.__table__.select().where(User.id == int(user_id))
+            user = await database.fetch_one(user_query)
+            
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="사용자를 찾을 수 없습니다."
+                )
+            
+            logger.info(f"Sending custom period report to user {user_id} for period: {start_date} ~ {end_date}")
+            
+            # 지정 기간 통계 수집
+            statistics = await self.get_weekly_statistics(
+                int(user_id), 
+                f"{start_date} 00:00:00",
+                f"{end_date} 23:59:59"
+            )
+            
+            # 활동이 없으면 알림
+            if statistics.get("total_validations_count", 0) == 0:
+                return BaseResponse(
+                    success=True,
+                    description="해당 기간에 활동 내역이 없어 리포트를 발송하지 않았습니다.",
+                    data=[{
+                        "period_start": start_date,
+                        "period_end": end_date,
+                        "email": user["email"],
+                        "total_validations": 0,
+                        "sent": False
+                    }]
+                )
+            
+            # 이메일 발송 (기간 리포트용으로 수정된 제목)
+            success = await email_service.send_custom_period_statistics_email(
+                user_email=user["email"],
+                username=user["name"],
+                statistics=statistics,
+                period_start=start_date,
+                period_end=end_date
+            )
+            
+            if success:
+                logger.info(f"Custom period report sent successfully to user {user_id}")
+                return BaseResponse(
+                    success=True,
+                    description=f"{start_date}부터 {end_date}까지의 리포트가 이메일로 발송되었습니다.",
+                    data=[{
+                        "period_start": start_date,
+                        "period_end": end_date,
+                        "email": user["email"],
+                        "statistics": statistics,
+                        "sent": True
+                    }]
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="이메일 발송에 실패했습니다."
+                )
+                
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to send custom period report to user {user_id}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"기간 리포트 발송 중 오류가 발생했습니다: {str(e)}"
+            )
+
+    async def get_validation_raw_data(self, access_token: str, period: str = "7days") -> BaseResponse:
+        """원시 검증 데이터 조회 - 프론트엔드에서 직접 분석할 수 있도록 단순한 형태로 제공"""
+        user_id = self.auth_service.get_user_id_from_token(access_token)
+        
+        try:
+            from datetime import datetime, timedelta
+            from app.models import Image
+            
+            # 기간 설정
+            now = datetime.now()
+            if period == "1day":
+                start_date = now - timedelta(days=1)
+            elif period == "7days":
+                start_date = now - timedelta(days=7)
+            elif period == "30days":
+                start_date = now - timedelta(days=30)
+            else:  # "all"
+                start_date = datetime(2020, 1, 1)  # 프로젝트 시작 기준
+            
+            # 모든 관련 검증 데이터 수집
+            all_validations = []
+            
+            # 1. 내가 검증한 데이터
+            my_validations_query = sqlalchemy.select(
+                ValidationRecord.has_watermark,
+                ValidationRecord.modification_rate,
+                ValidationRecord.time_created
+            ).select_from(ValidationRecord).where(
+                sqlalchemy.and_(
+                    ValidationRecord.user_id == int(user_id),
+                    ValidationRecord.time_created >= start_date,
+                    ValidationRecord.time_created <= now
+                )
+            ).order_by(ValidationRecord.time_created.desc())
+            
+            my_validations = await database.fetch_all(my_validations_query)
+            
+            # 2. 내 이미지가 다른 사람에 의해 검증된 데이터
+            others_validations_query = sqlalchemy.select(
+                ValidationRecord.has_watermark,
+                ValidationRecord.modification_rate,
+                ValidationRecord.time_created
+            ).select_from(
+                ValidationRecord.__table__.join(
+                    Image.__table__, 
+                    ValidationRecord.detected_watermark_image_id == Image.id
+                )
+            ).where(
+                sqlalchemy.and_(
+                    Image.user_id == int(user_id),
+                    ValidationRecord.user_id != int(user_id),
+                    ValidationRecord.time_created >= start_date,
+                    ValidationRecord.time_created <= now
+                )
+            ).order_by(ValidationRecord.time_created.desc())
+            
+            others_validations = await database.fetch_all(others_validations_query)
+            
+            # 모든 검증 데이터를 단순한 형태로 변환
+            for validation in my_validations:
+                all_validations.append({
+                    "is_tampered": bool(getattr(validation, 'has_watermark', False) and 
+                                     getattr(validation, 'modification_rate', 0) and 
+                                     getattr(validation, 'modification_rate', 0) > 0),
+                    "validation_time": getattr(validation, 'time_created').isoformat()
+                })
+            
+            for validation in others_validations:
+                all_validations.append({
+                    "is_tampered": bool(getattr(validation, 'has_watermark', False) and 
+                                     getattr(validation, 'modification_rate', 0) and 
+                                     getattr(validation, 'modification_rate', 0) > 0),
+                    "validation_time": getattr(validation, 'time_created').isoformat()
+                })
+            
+            # 시간순으로 정렬 (최신순)
+            all_validations.sort(key=lambda x: x['validation_time'], reverse=True)
+            
+            logger.info(f"Retrieved {len(all_validations)} raw validation records for user {user_id} (period: {period})")
+            
+            return BaseResponse(
+                success=True,
+                description="검증 데이터 조회 완료",
+                data=[{
+                    "period": period,
+                    "validations": all_validations
+                }]
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to get validation raw data for user {user_id}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"검증 데이터 조회 중 오류가 발생했습니다: {str(e)}"
+            )
+
+    async def get_dashboard_statistics(self, period: str = "7days"):
+        """대시보드용 통계 데이터 수집"""
+        try:
+            from datetime import datetime, timedelta
+            
+            # 기간 설정
+            now = datetime.now()
+            if period == "1day":
+                start_date = now - timedelta(days=1)
+                prev_start = start_date - timedelta(days=1)
+                prev_end = start_date
+            elif period == "7days":
+                start_date = now - timedelta(days=7)
+                prev_start = start_date - timedelta(days=7)
+                prev_end = start_date
+            elif period == "30days":
+                start_date = now - timedelta(days=30)
+                prev_start = start_date - timedelta(days=30)
+                prev_end = start_date
+            else:  # "all"
+                start_date = datetime(2020, 1, 1)  # 프로젝트 시작 기준
+                prev_start = start_date
+                prev_end = now - timedelta(days=365)  # 작년 같은 기간
+            
+            # 1. 현재 기간 요약 통계
+            current_validations_query = sqlalchemy.select(
+                sqlalchemy.func.count().label('total_validations'),
+                sqlalchemy.func.sum(
+                    sqlalchemy.case((ValidationRecord.has_watermark == True, 1), else_=0)
+                ).label('total_forgeries')
+            ).select_from(ValidationRecord).where(
+                sqlalchemy.and_(
+                    ValidationRecord.time_created >= start_date,
+                    ValidationRecord.time_created <= now
+                )
+            )
+            
+            current_stats = await database.fetch_one(current_validations_query)
+            
+            # 2. 이전 기간 통계 (비교용)
+            prev_validations_query = sqlalchemy.select(
+                sqlalchemy.func.count().label('total_validations'),
+                sqlalchemy.func.sum(
+                    sqlalchemy.case((ValidationRecord.has_watermark == True, 1), else_=0)
+                ).label('total_forgeries')
+            ).select_from(ValidationRecord).where(
+                sqlalchemy.and_(
+                    ValidationRecord.time_created >= prev_start,
+                    ValidationRecord.time_created <= prev_end
+                )
+            )
+            
+            prev_stats = await database.fetch_one(prev_validations_query)
+            
+            # 3. 활성 사용자 수
+            active_users_query = sqlalchemy.select(
+                sqlalchemy.func.count(sqlalchemy.distinct(ValidationRecord.user_id)).label('active_users')
+            ).select_from(ValidationRecord).where(
+                sqlalchemy.and_(
+                    ValidationRecord.time_created >= start_date,
+                    ValidationRecord.time_created <= now
+                )
+            )
+            
+            active_users_result = await database.fetch_one(active_users_query)
+            
+            # 4. 총 이미지 수
+            from app.models import Image
+            total_images_query = sqlalchemy.select(sqlalchemy.func.count().label('total_images')).select_from(Image)
+            total_images_result = await database.fetch_one(total_images_query)
+            
+            # 5. 일별 데이터 (최근 기간만)
+            if period == "all":
+                # 전체 기간일 때는 월별 데이터
+                daily_query = sqlalchemy.select(
+                    sqlalchemy.func.date_format(ValidationRecord.time_created, '%Y-%m').label('date'),
+                    sqlalchemy.func.count().label('validations'),
+                    sqlalchemy.func.sum(
+                        sqlalchemy.case((ValidationRecord.has_watermark == True, 1), else_=0)
+                    ).label('forgeries'),
+                    sqlalchemy.func.count(sqlalchemy.distinct(ValidationRecord.user_id)).label('active_users')
+                ).select_from(ValidationRecord).where(
+                    ValidationRecord.time_created >= start_date
+                ).group_by(
+                    sqlalchemy.func.date_format(ValidationRecord.time_created, '%Y-%m')
+                ).order_by(
+                    sqlalchemy.desc(sqlalchemy.func.date_format(ValidationRecord.time_created, '%Y-%m'))
+                ).limit(12)
+            else:
+                # 일별 데이터
+                daily_query = sqlalchemy.select(
+                    sqlalchemy.func.date(ValidationRecord.time_created).label('date'),
+                    sqlalchemy.func.count().label('validations'),
+                    sqlalchemy.func.sum(
+                        sqlalchemy.case((ValidationRecord.has_watermark == True, 1), else_=0)
+                    ).label('forgeries'),
+                    sqlalchemy.func.count(sqlalchemy.distinct(ValidationRecord.user_id)).label('active_users')
+                ).select_from(ValidationRecord).where(
+                    sqlalchemy.and_(
+                        ValidationRecord.time_created >= start_date,
+                        ValidationRecord.time_created <= now
+                    )
+                ).group_by(
+                    sqlalchemy.func.date(ValidationRecord.time_created)
+                ).order_by(
+                    sqlalchemy.desc(sqlalchemy.func.date(ValidationRecord.time_created))
+                )
+                
+            daily_data = await database.fetch_all(daily_query)
+            
+            # 6. 통계 계산
+            total_validations = getattr(current_stats, 'total_validations', 0) or 0
+            total_forgeries = getattr(current_stats, 'total_forgeries', 0) or 0
+            detection_rate = (total_forgeries / total_validations * 100) if total_validations > 0 else 0
+            
+            prev_validations = getattr(prev_stats, 'total_validations', 0) or 0
+            prev_forgeries = getattr(prev_stats, 'total_forgeries', 0) or 0
+            
+            validation_growth = ((total_validations - prev_validations) / prev_validations * 100) if prev_validations > 0 else 0
+            forgery_growth = ((total_forgeries - prev_forgeries) / prev_forgeries * 100) if prev_forgeries > 0 else 0
+            
+            # 7. 응답 데이터 구성
+            from app.schemas import DashboardStats, DashboardSummary, DailyStat, PeriodComparison
+            
+            summary = DashboardSummary(
+                total_validations=total_validations,
+                total_forgeries=total_forgeries,
+                detection_rate=round(detection_rate, 2),
+                active_users=getattr(active_users_result, 'active_users', 0) or 0,
+                total_images=getattr(total_images_result, 'total_images', 0) or 0
+            )
+            
+            daily_stats = [
+                DailyStat(
+                    date=str(getattr(row, 'date', '')),
+                    validations=getattr(row, 'validations', 0),
+                    forgeries=getattr(row, 'forgeries', 0) or 0,
+                    active_users=getattr(row, 'active_users', 0)
+                )
+                for row in daily_data
+            ]
+            
+            comparison = PeriodComparison(
+                current_validations=total_validations,
+                current_forgeries=total_forgeries,
+                previous_validations=prev_validations,
+                previous_forgeries=prev_forgeries,
+                validation_growth_rate=round(validation_growth, 2),
+                forgery_growth_rate=round(forgery_growth, 2)
+            )
+            
+            dashboard_stats = DashboardStats(
+                period=period,
+                summary=summary,
+                daily_data=daily_stats,
+                comparison=comparison
+            )
+            
+            logger.info(f"Dashboard statistics generated for period {period}: {total_validations} validations, {total_forgeries} forgeries")
+            return dashboard_stats
+            
+        except Exception as e:
+            logger.error(f"Failed to get dashboard statistics for period {period}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"대시보드 통계 조회 중 오류가 발생했습니다: {str(e)}"
+            )
+
+
+    async def get_user_report_statistics(self, access_token: str) -> BaseResponse:
+        """내 유저 제보 데이터 통계 조회"""
+        try:
+            import re
+            from collections import Counter
+            
+            # 토큰에서 사용자 ID 추출
+            user_id = self.auth_service.get_user_id_from_token(access_token)
+            
+            # 사용자별 필터링 조건
+            where_conditions = [
+                ValidationRecord.user_id == int(user_id),
+                ValidationRecord.user_report_link.isnot(None),
+                ValidationRecord.user_report_link != ""
+            ]
+            
+            # 해당 사용자가 제보한 user_report_link가 있는 ValidationRecord 조회
+            query = sqlalchemy.select(
+                ValidationRecord.user_report_link,
+                ValidationRecord.time_created
+            ).select_from(ValidationRecord).where(
+                sqlalchemy.and_(*where_conditions)
+            ).order_by(ValidationRecord.time_created.desc())
+            
+            records = await database.fetch_all(query)
+            
+            if not records:
+                from app.schemas import UserReportStats, DomainFrequency, RecentReportLink
+                empty_stats = UserReportStats(
+                    most_frequent_domains=[],
+                    recent_report_links=[]
+                )
+                return BaseResponse(
+                    success=True,
+                    description="내 제보 데이터가 없습니다.",
+                    data=[empty_stats.model_dump()]
+                )
+            
+            # URL에서 도메인 추출 및 빈도 계산
+            domains = []
+            recent_links = []
+            
+            for record in records:
+                link = getattr(record, 'user_report_link', None)
+                if not link:
+                    continue
+                
+                # 최근 5개 링크 수집
+                if len(recent_links) < 5:
+                    recent_links.append({
+                        'link': link,
+                        'reported_time': getattr(record, 'time_created').isoformat()
+                    })
+                
+                # 도메인 추출
+                try:
+                    # URL에서 프로토콜과 경로 제거, 도메인만 추출
+                    # https:// 또는 http:// 제거
+                    cleaned_url = re.sub(r'^https?://', '', link)
+                    # 경로와 쿼리 파라미터 제거
+                    domain = cleaned_url.split('/')[0].split('?')[0].split('#')[0]
+                    # www. 제거
+                    domain = re.sub(r'^www\.', '', domain)
+                    
+                    if domain:  # 빈 문자열이 아닌 경우만
+                        domains.append(domain)
+                
+                except Exception as e:
+                    logger.warning(f"도메인 추출 실패: {link}, 오류: {str(e)}")
+                    continue
+            
+            # 도메인 빈도수 계산 (상위 5개)
+            domain_counter = Counter(domains)
+            top_domains = domain_counter.most_common(5)
+            
+            from app.schemas import UserReportStats, DomainFrequency, RecentReportLink
+            
+            # 응답 데이터 구성
+            most_frequent_domains = [
+                DomainFrequency(domain=domain, count=count) 
+                for domain, count in top_domains
+            ]
+            
+            recent_report_links = [
+                RecentReportLink(link=item['link'], reported_time=item['reported_time']) 
+                for item in recent_links
+            ]
+            
+            stats = UserReportStats(
+                most_frequent_domains=most_frequent_domains,
+                recent_report_links=recent_report_links
+            )
+            
+            logger.info(f"User report statistics generated: {len(most_frequent_domains)} domains, {len(recent_report_links)} recent links")
+            
+            return BaseResponse(
+                success=True,
+                description="내 유저 제보 통계를 조회했습니다.",
+                data=[stats.model_dump()]
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to get user report statistics: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"유저 제보 통계 조회 중 오류가 발생했습니다: {str(e)}"
+            )
+
 
 validation_service = ValidationService()

@@ -801,5 +801,391 @@ class EmailService:
         
         return await self.send_email(user_email, subject, html_body, is_html=True)
 
+    async def send_weekly_statistics_email(
+        self, 
+        user_email: str, 
+        username: str,
+        statistics: dict,
+        period_start: str,
+        period_end: str
+    ) -> bool:
+        """주간 위변조 통계 리포트 이메일 발송"""
+        subject = f"📊 Aegis 주간 리포트 ({period_start} ~ {period_end})"
+        
+        # 통계 데이터 추출
+        my_validations = statistics.get('my_validations_count', 0)
+        my_image_validations = statistics.get('my_image_validations_count', 0)
+        self_validations = statistics.get('self_validations_count', 0)
+        total_validations = statistics.get('total_validations_count', 0)
+        
+        # 위변조 검출 건수
+        forgery_detected = statistics.get('forgery_detected_count', 0)
+        forgery_rate = statistics.get('forgery_detection_rate', 0.0)
+        
+        # 위변조 검출 레포트 목록
+        forgery_reports = statistics.get('forgery_reports', [])
+        
+        html_body = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{ font-family: 'Malgun Gothic', Arial, sans-serif; margin: 0; padding: 20px; background-color: #f8fafc; }}
+                .container {{ max-width: 800px; margin: 0 auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+                .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }}
+                .header h1 {{ margin: 0; font-size: 28px; font-weight: 700; }}
+                .header p {{ margin: 10px 0 0 0; font-size: 16px; opacity: 0.9; }}
+                .content {{ padding: 40px; }}
+                .stats-grid {{ 
+                    display: flex; 
+                    justify-content: space-between; 
+                    gap: 40px; 
+                    margin: 30px 0; 
+                    flex-wrap: wrap;
+                }}
+                .stat-card {{ 
+                    background: #f8fafc; 
+                    border-radius: 10px; 
+                    padding: 16px 10px; 
+                    text-align: center; 
+                    border-left: 4px solid #667eea; 
+                    flex: 1; 
+                    min-width: 120px;
+                    max-width: 150px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                }}
+                .stat-number {{ font-size: 32px; font-weight: 700; color: #667eea; margin-bottom: 8px; }}
+                .stat-label {{ color: #64748b; font-size: 12px; font-weight: 500; line-height: 1.2; }}
+                .highlight-section {{ background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 8px; padding: 20px; margin: 20px 0; }}
+                .highlight-title {{ font-size: 18px; font-weight: 600; color: #92400e; margin-bottom: 10px; }}
+                .highlight-content {{ color: #b45309; }}
+                .summary-section {{ background: #f1f5f9; border-radius: 8px; padding: 20px; margin: 20px 0; }}
+                .footer {{ background: #f8fafc; padding: 20px; text-align: center; color: #64748b; font-size: 14px; }}
+                .footer a {{ color: #667eea; text-decoration: none; }}
+                .divider {{ height: 2px; background: linear-gradient(90deg, #667eea, #764ba2); margin: 25px 0; }}
+                .btn-primary {{ 
+                    display: inline-block !important; 
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; 
+                    background-color: #667eea !important;
+                    color: #ffffff !important; 
+                    padding: 15px 30px !important; 
+                    text-decoration: none !important; 
+                    border-radius: 8px !important; 
+                    font-weight: 600 !important; 
+                    font-size: 16px !important; 
+                    margin: 20px 0 !important; 
+                    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3) !important;
+                    font-family: 'Malgun Gothic', Arial, sans-serif !important;
+                    border: none !important;
+                }}
+                .btn-primary:visited {{ 
+                    color: #ffffff !important;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+                }}
+                .btn-primary:hover {{ 
+                    color: #ffffff !important;
+                    background: linear-gradient(135deg, #5a6fd8 0%, #6b4190 100%) !important;
+                }}
+                .button-container {{ text-align: center; margin: 30px 0; }}
+                
+                /* 모바일 대응 */
+                @media (max-width: 600px) {{
+                    .container {{ max-width: 100%; margin: 10px; }}
+                    .content {{ padding: 20px; }}
+                    .stats-grid {{ 
+                        display: grid; 
+                        grid-template-columns: 1fr 1fr; 
+                        gap: 12px; 
+                    }}
+                    .stat-card {{ 
+                        min-width: auto; 
+                        padding: 20px 15px; 
+                    }}
+                    .stat-number {{ font-size: 28px; }}
+                    .stat-label {{ font-size: 12px; }}
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📊 주간 리포트</h1>
+                    <p>{period_start} ~ {period_end}</p>
+                    <p>안녕하세요, {username}님!</p>
+                </div>
+                
+                <div class="content">
+                    <h2 style="color: #1e293b; margin-bottom: 20px;">📈 이번 주 활동 요약</h2>
+                    
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-number">{my_validations}</div>
+                            <div class="stat-label">내가 검증한 이미지</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{my_image_validations}</div>
+                            <div class="stat-label">타인이 검증한 내 이미지</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{self_validations}</div>
+                            <div class="stat-label">내가 검증한 내 이미지</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{total_validations}</div>
+                            <div class="stat-label">전체 검증 건수</div>
+                        </div>
+                    </div>
+                    
+                    <div class="divider"></div>
+                    
+                    {self._generate_forgery_alerts_html(forgery_reports, forgery_detected, forgery_rate)}
+                    
+                    <div style="margin-top: 30px; padding: 20px; background: linear-gradient(135deg, #e0f2fe 0%, #b3e5fc 100%); border-radius: 8px;">
+                        <p style="margin: 0; color: #0277bd; font-weight: 600;">💡 안전한 이미지 관리 팁</p>
+                        <ul style="color: #01579b; margin-top: 10px; padding-left: 20px;">
+                            <li>정기적으로 업로드한 이미지의 검증 현황을 확인하세요</li>
+                            <li>위변조 의심 이미지 발견 시 즉시 제보해 주세요</li>
+                            <li>중요한 이미지는 워터마크로 보호하세요</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="button-container">
+                        <a href="https://aegis.gdgoc.com" class="btn-primary" 
+                           style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); background-color: #667eea; color: #ffffff; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; margin: 20px 0; font-family: 'Malgun Gothic', Arial, sans-serif; border: none;">
+                            🛡️ Aegis로 바로가기
+                        </a>
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <p>이 리포트는 매주 일요일 자동으로 발송됩니다.</p>
+                    <p>사용자가 원할 때 수동으로 발송할 수도 있습니다.</p>
+                    <p><a href="https://aegis.gdgoc.com">Aegis</a>와 함께 안전한 이미지 관리를 하세요!</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return await self.send_email(user_email, subject, html_body, is_html=True)
+
+    async def send_custom_period_statistics_email(
+        self, 
+        user_email: str, 
+        username: str,
+        statistics: dict,
+        period_start: str,
+        period_end: str
+    ) -> bool:
+        """지정 기간 위변조 통계 리포트 이메일 발송"""
+        # 기간 일수 계산
+        from datetime import datetime
+        start_dt = datetime.strptime(period_start, '%Y-%m-%d').date()
+        end_dt = datetime.strptime(period_end, '%Y-%m-%d').date()
+        days_count = (end_dt - start_dt).days + 1
+        
+        subject = f"📊 Aegis {days_count}일간 리포트 ({period_start} ~ {period_end})"
+        
+        # 통계 데이터 추출
+        my_validations = statistics.get('my_validations_count', 0)
+        my_image_validations = statistics.get('my_image_validations_count', 0)
+        self_validations = statistics.get('self_validations_count', 0)
+        total_validations = statistics.get('total_validations_count', 0)
+        
+        # 위변조 검출 건수
+        forgery_detected = statistics.get('forgery_detected_count', 0)
+        forgery_rate = statistics.get('forgery_detection_rate', 0.0)
+        
+        # 위변조 검출 레포트 목록
+        forgery_reports = statistics.get('forgery_reports', [])
+        
+        html_body = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {{ font-family: 'Malgun Gothic', Arial, sans-serif; margin: 0; padding: 20px; background-color: #f8fafc; }}
+                .container {{ max-width: 800px; margin: 0 auto; background-color: white; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+                .header {{ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px; text-align: center; }}
+                .header h1 {{ margin: 0; font-size: 28px; font-weight: 700; }}
+                .header p {{ margin: 10px 0 0 0; font-size: 16px; opacity: 0.9; }}
+                .content {{ padding: 40px; }}
+                .stats-grid {{ 
+                    display: flex; 
+                    justify-content: space-between; 
+                    gap: 4px; 
+                    margin: 30px 0; 
+                    flex-wrap: wrap;
+                }}
+                .stat-card {{ 
+                    background: #f8fafc; 
+                    border-radius: 10px; 
+                    padding: 16px 10px; 
+                    text-align: center; 
+                    border-left: 4px solid #667eea; 
+                    flex: 1; 
+                    min-width: 120px;
+                    max-width: 150px;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+                }}
+                .stat-number {{ font-size: 32px; font-weight: 700; color: #667eea; margin-bottom: 8px; }}
+                .stat-label {{ color: #64748b; font-size: 12px; font-weight: 500; line-height: 1.2; }}
+                .highlight-section {{ background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-radius: 8px; padding: 20px; margin: 20px 0; }}
+                .highlight-title {{ font-size: 18px; font-weight: 600; color: #92400e; margin-bottom: 10px; }}
+                .highlight-content {{ color: #b45309; }}
+                .summary-section {{ background: #f1f5f9; border-radius: 8px; padding: 20px; margin: 20px 0; }}
+                .footer {{ background: #f8fafc; padding: 20px; text-align: center; color: #64748b; font-size: 14px; }}
+                .footer a {{ color: #667eea; text-decoration: none; }}
+                .divider {{ height: 2px; background: linear-gradient(90deg, #667eea, #764ba2); margin: 25px 0; }}
+                .btn-primary {{ 
+                    display: inline-block !important; 
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; 
+                    background-color: #667eea !important;
+                    color: #ffffff !important; 
+                    padding: 15px 30px !important; 
+                    text-decoration: none !important; 
+                    border-radius: 8px !important; 
+                    font-weight: 600 !important; 
+                    font-size: 16px !important; 
+                    margin: 20px 0 !important; 
+                    box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3) !important;
+                    font-family: 'Malgun Gothic', Arial, sans-serif !important;
+                    border: none !important;
+                }}
+                .btn-primary:visited {{ 
+                    color: #ffffff !important;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+                }}
+                .btn-primary:hover {{ 
+                    color: #ffffff !important;
+                    background: linear-gradient(135deg, #5a6fd8 0%, #6b4190 100%) !important;
+                }}
+                .button-container {{ text-align: center; margin: 30px 0; }}
+                
+                /* 모바일 대응 */
+                @media (max-width: 600px) {{
+                    .container {{ max-width: 100%; margin: 10px; }}
+                    .content {{ padding: 20px; }}
+                    .stats-grid {{ 
+                        display: grid; 
+                        grid-template-columns: 1fr 1fr; 
+                        gap: 12px; 
+                    }}
+                    .stat-card {{ 
+                        min-width: auto; 
+                        padding: 20px 15px; 
+                    }}
+                    .stat-number {{ font-size: 28px; }}
+                    .stat-label {{ font-size: 12px; }}
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h1>📊 {days_count}일간 리포트</h1>
+                    <p>{period_start} ~ {period_end}</p>
+                    <p>안녕하세요, {username}님!</p>
+                </div>
+                
+                <div class="content">
+                    <h2 style="color: #1e293b; margin-bottom: 20px;">📈 선택 기간 활동 요약</h2>
+                    
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-number">{my_validations}</div>
+                            <div class="stat-label">내가 검증한 이미지</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{my_image_validations}</div>
+                            <div class="stat-label">타인이 검증한 내 이미지</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{self_validations}</div>
+                            <div class="stat-label">내가 검증한 내 이미지</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">{total_validations}</div>
+                            <div class="stat-label">전체 검증 건수</div>
+                        </div>
+                    </div>
+                    
+                    <div class="divider"></div>
+                    
+                    {self._generate_forgery_alerts_html(forgery_reports, forgery_detected, forgery_rate)}
+                    
+                    <div style="margin-top: 30px; padding: 20px; background: linear-gradient(135deg, #e0f2fe 0%, #b3e5fc 100%); border-radius: 8px;">
+                        <p style="margin: 0; color: #0277bd; font-weight: 600;">💡 안전한 이미지 관리 팁</p>
+                        <ul style="color: #01579b; margin-top: 10px; padding-left: 20px;">
+                            <li>정기적으로 업로드한 이미지의 검증 현황을 확인하세요</li>
+                            <li>위변조 의심 이미지 발견 시 즉시 제보해 주세요</li>
+                            <li>중요한 이미지는 워터마크로 보호하세요</li>
+                        </ul>
+                    </div>
+                    
+                    <div class="button-container">
+                        <a href="https://aegis.gdgoc.com" class="btn-primary" 
+                           style="display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); background-color: #667eea; color: #ffffff; padding: 15px 30px; text-decoration: none; border-radius: 8px; font-weight: 600; font-size: 16px; margin: 20px 0; font-family: 'Malgun Gothic', Arial, sans-serif; border: none;">
+                            🛡️ Aegis로 바로가기
+                        </a>
+                    </div>
+                </div>
+                
+                <div class="footer">
+                    <p>이 리포트는 사용자가 요청한 맞춤 기간 리포트입니다.</p>
+                    <p><a href="https://aegis.gdgoc.com">Aegis</a>와 함께 안전한 이미지 관리를 하세요!</p>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+        
+        return await self.send_email(user_email, subject, html_body, is_html=True)
+
+    def _generate_forgery_alerts_html(self, forgery_reports: list, forgery_detected: int, forgery_rate: float = 0.0) -> str:
+        """위변조 검출 알림 HTML 생성"""
+        if forgery_detected == 0:
+            return ""
+        
+        # 레포트 링크 목록 생성
+        report_links_html = ""
+        if forgery_reports:
+            report_links_html = "<div style='margin-top: 15px;'>"
+            report_links_html += "<p style='margin: 0 0 10px 0; color: #b45309; font-weight: 600;'>📋 검출된 위변조 레포트:</p>"
+            report_links_html += "<ul style='margin: 0; padding-left: 20px; color: #b45309;'>"
+            
+            for report in forgery_reports:
+                report_url = f"https://aegis.gdgoc.com/result/{report['validation_uuid']}"
+                report_links_html += f"""
+                    <li style='margin: 8px 0; line-height: 1.4;'>
+                        <a href='{report_url}' style='color: #dc2626; text-decoration: none; font-weight: 600;'>
+                            {report['filename']}
+                        </a>
+                        <span style='color: #b45309; font-size: 13px;'>
+                            (변조율: {report['modification_rate']:.1f}%, {report['validation_time']}) - 
+                            <a href='{report_url}' style='color: #dc2626; text-decoration: underline; font-size: 12px;'>
+                                상세보기
+                            </a>
+                        </span>
+                    </li>
+                """
+            
+            report_links_html += "</ul>"
+            if len(forgery_reports) == 5 and forgery_detected > 5:
+                report_links_html += f"<p style='margin: 10px 0 0 0; color: #b45309; font-size: 12px; font-style: italic;'>* 총 {forgery_detected}건 중 최근 5건만 표시</p>"
+            report_links_html += "</div>"
+        
+        return f"""
+        <div class='highlight-section'>
+            <div class='highlight-title'>🚨 위변조 검출 알림</div>
+            <div class='highlight-content'>
+                이번 주 총 <strong>{forgery_detected}건</strong>의 위변조가 검출되었습니다.
+                {report_links_html}
+            </div>
+        </div>
+        """
+
 
 email_service = EmailService()

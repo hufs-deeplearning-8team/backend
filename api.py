@@ -2,7 +2,7 @@ import logging
 from fastapi import APIRouter, UploadFile, File, Security, Form, Depends
 from fastapi.security import APIKeyHeader
 
-from app.schemas import BaseResponse, UserCreate, UserLogin, UserReportRequest
+from app.schemas import BaseResponse, UserCreate, UserLogin, UserReportRequest, CustomReportRequest, UserReportStats
 from app.services.user_service import user_service
 from app.services.image_service import image_service
 from app.services.validation_service import validation_service
@@ -299,3 +299,206 @@ async def update_user_report(
 ):
     return await validation_service.update_user_report(report_data, access_token)
 
+@router.post("/my-weekly-report",
+    summary="내 주간 리포트 이메일 발송",
+    description="지난 1주일간의 개인 위변조 통계 리포트를 내 이메일로 발송합니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "주간 리포트 발송 완료"},
+        401: {"description": "유효하지 않은 토큰"},
+        500: {"description": "서버 오류"}
+    }
+)
+async def send_my_weekly_report(
+    access_token: str = Security(APIKeyHeader(name='access-token'))
+):
+    """개인 주간 리포트 이메일 발송"""
+    return await validation_service.send_individual_weekly_report(access_token)
+
+@router.post("/admin/send-weekly-reports-now",
+    summary="주간 리포트 즉시 발송 (테스트용)",
+    description="테스트를 위해 주간 위변조 통계 리포트를 즉시 발송합니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "주간 리포트 발송 완료"},
+        500: {"description": "서버 오류"}
+    }
+)
+async def send_weekly_reports_now():
+    """테스트용 주간 리포트 즉시 발송 API"""
+    try:
+        result = await validation_service.send_weekly_reports_to_all_users()
+        
+        return BaseResponse(
+            success=True,
+            description="주간 리포트 발송이 완료되었습니다.",
+            data=[result]
+        )
+    except Exception as e:
+        logger.error(f"Weekly report sending failed: {str(e)}")
+        return BaseResponse(
+            success=False,
+            description=f"주간 리포트 발송 중 오류가 발생했습니다: {str(e)}",
+            data=[]
+        )
+
+@router.post("/my-custom-report",
+    summary="맞춤 기간 리포트 이메일 발송",
+    description="지정한 기간의 개인 위변조 통계 리포트를 내 이메일로 발송합니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "맞춤 기간 리포트 발송 완료"},
+        400: {"description": "잘못된 날짜 형식 또는 범위"},
+        401: {"description": "유효하지 않은 토큰"},
+        500: {"description": "서버 오류"}
+    }
+)
+async def send_my_custom_report(
+    report_request: CustomReportRequest,
+    access_token: str = Security(APIKeyHeader(name='access-token'))
+):
+    """개인 맞춤 기간 리포트 이메일 발송"""
+    return await validation_service.send_custom_period_report(
+        access_token,
+        report_request.start_date,
+        report_request.end_date
+    )
+
+
+@router.get("/my-hourly-validation-stats",
+    summary="대시보드 통계 조회",
+    description="지정된 기간의 검증 통계를 조회합니다. 그래프 및 대시보드용 데이터를 제공합니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "통계 조회 성공"},
+        400: {"description": "잘못된 기간 파라미터"},
+        500: {"description": "통계 조회 실패"}
+    }
+)
+async def get_dashboard_statistics(
+    period: str = "7days"
+):
+    """
+    대시보드 통계 조회
+    
+    Args:
+        period: 조회 기간 ("1day", "7days", "30days", "all")
+    
+    Returns:
+        BaseResponse: 통계 데이터를 포함한 응답
+    """
+    
+    # 유효한 기간 검증
+    valid_periods = ["1day", "7days", "30days", "all"]
+    if period not in valid_periods:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail=f"유효하지 않은 기간입니다. 사용 가능한 값: {', '.join(valid_periods)}"
+        )
+    
+    dashboard_stats = await validation_service.get_dashboard_statistics(period)
+    
+    return BaseResponse(
+        success=True,
+        description="대시보드 통계 조회가 완료되었습니다.",
+        data=[dashboard_stats.model_dump()]
+    )
+
+@router.get("/validation-raw-data",
+    summary="원시 검증 데이터 조회",
+    description="프론트엔드에서 직접 분석할 수 있도록 단순한 형태의 원시 검증 데이터를 제공합니다. 내가 검증한 것 + 남이 내 이미지로 검증한 것 + 내가 내 것 검증한 것을 모두 포함합니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "원시 데이터 조회 성공"},
+        400: {"description": "잘못된 기간 파라미터"},
+        401: {"description": "유효하지 않은 토큰"},
+        500: {"description": "데이터 조회 실패"}
+    }
+)
+async def get_validation_raw_data(
+    period: str = "7days",
+    access_token: str = Security(APIKeyHeader(name='access-token'))
+):
+    """
+    원시 검증 데이터 조회
+    
+    Args:
+        period: 조회 기간 ("1day", "7days", "30days", "all")
+        access_token: 사용자 인증 토큰
+    
+    Returns:
+        BaseResponse: 단순한 is_tampered + validation_time 배열을 포함한 응답
+        
+    Response Example:
+        {
+            "success": true,
+            "description": "검증 데이터 조회 완료",
+            "data": {
+                "period": "7days",
+                "validations": [
+                    {
+                        "is_tampered": false,
+                        "validation_time": "2024-01-15T14:30:00Z"
+                    },
+                    {
+                        "is_tampered": true,
+                        "validation_time": "2024-01-15T16:45:00Z"
+                    }
+                ]
+            }
+        }
+    """
+    
+    # 유효한 기간 검증
+    valid_periods = ["1day", "7days", "30days", "all"]
+    if period not in valid_periods:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=400,
+            detail=f"유효하지 않은 기간입니다. 사용 가능한 값: {', '.join(valid_periods)}"
+        )
+    
+    return await validation_service.get_validation_raw_data(access_token, period)
+
+
+@router.get("/user-report-stats",
+    summary="내 유저 제보 데이터 통계 조회",
+    description="내가 제보한 위변조 데이터에서 도메인별 최빈값 상위 5개와 최신 제보 링크 5개를 반환합니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "유저 제보 통계 조회 성공"},
+        400: {"description": "잘못된 기간 파라미터"},
+        401: {"description": "유효하지 않은 토큰"},
+        500: {"description": "서버 오류"}
+    }
+)
+async def get_user_report_statistics(
+    access_token: str = Security(APIKeyHeader(name='access-token'))
+):
+    """
+    내 유저 제보 데이터 통계 조회
+    
+    Args:
+        access_token: 사용자 인증 토큰
+    
+    Returns:
+        BaseResponse: 내가 제보한 데이터에서 최빈값 도메인 상위 5개와 최근 제보 링크 5개를 포함한 응답
+        
+    Response Example:
+        {
+            "success": true,
+            "description": "내 유저 제보 통계를 조회했습니다.",
+            "data": [{
+                "most_frequent_domains": [
+                    {"domain": "example.com", "count": 15},
+                    {"domain": "test.com", "count": 12}
+                ],
+                "recent_report_links": [
+                    {"link": "https://example.com/page1", "reported_time": "2025-01-20T15:30:00Z"},
+                    {"link": "https://test.com/image2", "reported_time": "2025-01-20T14:20:00Z"}
+                ]
+            }]
+        }
+    """
+    return await validation_service.get_user_report_statistics(access_token)
