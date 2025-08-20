@@ -222,6 +222,22 @@ async def get_my_validation_summary(
 ):
     return await validation_service.get_validation_summary(access_token, limit, offset)
 
+@router.get("/my-validation-summary2",
+    summary="내 위변조 검증 통합 요약 정보 조회",
+    description="내가 검증한 데이터와 내 이미지가 검증된 데이터를 모두 포함하여 조회합니다. 각 레코드는 관계 유형으로 구분됩니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "통합 검증 요약 정보 조회 성공"},
+        401: {"description": "유효하지 않은 토큰"}
+    }
+)
+async def get_my_validation_summary2(
+    access_token: str = Security(APIKeyHeader(name='access-token')),
+    limit: int = 20,
+    offset: int = 0
+):
+    return await validation_service.get_validation_summary2(access_token, limit, offset)
+
 @router.get("/test-s3",
     summary="S3 연결 테스트",
     description="S3 연결 상태를 테스트합니다.",

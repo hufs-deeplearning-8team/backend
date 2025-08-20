@@ -1105,5 +1105,161 @@ class ValidationService:
                 detail=f"제보 정보 업데이트 중 오류가 발생했습니다: {str(e)}"
             )
 
+    async def get_validation_summary2(self, access_token: str, limit: int = 20, offset: int = 0) -> BaseResponse:
+        """통합 검증 요약 정보 조회 - 내가 검증한 것과 내 이미지가 검증된 것 모두 포함"""
+        user_id = self.auth_service.get_user_id_from_token(access_token)
+        
+        logger.info(f"User {user_id} requesting integrated validation summary with limit {limit}, offset {offset}")
+        
+        try:
+            # 통합 쿼리 (UNION 사용)
+            unified_query = sqlalchemy.text("""
+                (
+                    SELECT 
+                        vr.id,
+                        vr.uuid,
+                        vr.user_id,
+                        vr.input_image_filename,
+                        vr.has_watermark,
+                        vr.detected_watermark_image_id,
+                        vr.modification_rate,
+                        vr.validation_algorithm,
+                        vr.time_created,
+                        vr.user_report_link,
+                        vr.user_report_text,
+                        CASE 
+                            WHEN i.user_id = :user_id THEN 3
+                            ELSE 1
+                        END as relation_type,
+                        i.user_id as original_image_owner_id,
+                        i.filename as original_image_filename,
+                        i.copyright as original_image_copyright
+                    FROM validation_record vr
+                    LEFT JOIN image i ON vr.detected_watermark_image_id = i.id
+                    WHERE vr.user_id = :user_id
+                )
+                UNION
+                (
+                    SELECT 
+                        vr.id,
+                        vr.uuid,
+                        vr.user_id,
+                        vr.input_image_filename,
+                        vr.has_watermark,
+                        vr.detected_watermark_image_id,
+                        vr.modification_rate,
+                        vr.validation_algorithm,
+                        vr.time_created,
+                        vr.user_report_link,
+                        vr.user_report_text,
+                        2 as relation_type,
+                        i.user_id as original_image_owner_id,
+                        i.filename as original_image_filename,
+                        i.copyright as original_image_copyright
+                    FROM validation_record vr
+                    INNER JOIN image i ON vr.detected_watermark_image_id = i.id
+                    WHERE i.user_id = :user_id AND vr.user_id != :user_id
+                )
+                ORDER BY time_created DESC
+                LIMIT :limit OFFSET :offset
+            """)
+            
+            records = await database.fetch_all(
+                unified_query,
+                values={"user_id": int(user_id), "limit": limit, "offset": offset}
+            )
+            
+            # 통계 데이터 계산
+            stats_query = sqlalchemy.text("""
+                SELECT 
+                    COUNT(DISTINCT CASE WHEN relation_type = 1 THEN id END) as my_validations,
+                    COUNT(DISTINCT CASE WHEN relation_type = 2 THEN id END) as my_image_validations,
+                    COUNT(DISTINCT CASE WHEN relation_type = 3 THEN id END) as self_validations,
+                    COUNT(DISTINCT id) as total_records
+                FROM (
+                    (
+                        SELECT 
+                            vr.id,
+                            CASE 
+                                WHEN i.user_id = :user_id THEN 3
+                                ELSE 1
+                            END as relation_type
+                        FROM validation_record vr
+                        LEFT JOIN image i ON vr.detected_watermark_image_id = i.id
+                        WHERE vr.user_id = :user_id
+                    )
+                    UNION
+                    (
+                        SELECT 
+                            vr.id,
+                            2 as relation_type
+                        FROM validation_record vr
+                        INNER JOIN image i ON vr.detected_watermark_image_id = i.id
+                        WHERE i.user_id = :user_id AND vr.user_id != :user_id
+                    )
+                ) as unified_stats
+            """)
+            
+            stats_result = await database.fetch_one(
+                stats_query, 
+                values={"user_id": int(user_id)}
+            )
+            
+            # 응답 데이터 구성
+            validation_records = []
+            for record in records:
+                record_data = {
+                    "validation_id": record["uuid"],
+                    "record_id": record["id"],
+                    "user_id": record["user_id"],
+                    "input_filename": record["input_image_filename"],
+                    "has_watermark": record["has_watermark"],
+                    "detected_watermark_image_id": record["detected_watermark_image_id"],
+                    "modification_rate": record["modification_rate"],
+                    "validation_algorithm": record["validation_algorithm"],
+                    "validation_time": record["time_created"].isoformat(),
+                    "s3_validation_image_url": f"{settings.s3_record_dir}/{record['uuid']}/{record['input_image_filename']}",
+                    "s3_mask_url": f"{settings.s3_record_dir}/{record['uuid']}/mask.png",
+                    "user_report_link": record["user_report_link"],
+                    "user_report_text": record["user_report_text"],
+                    "relation_type": record["relation_type"],  # 1: 내가 검증, 2: 내 이미지가 검증됨, 3: 둘 다
+                    "original_image_owner_id": record["original_image_owner_id"],
+                    "original_image_filename": record["original_image_filename"],
+                    "original_image_copyright": record["original_image_copyright"]
+                }
+                validation_records.append(record_data)
+            
+            # 요약 정보 구성
+            summary_data = {
+                "user_statistics": {
+                    "my_validations_count": stats_result["my_validations"] or 0,  # 내가 검증한 것 (relation_type 1)
+                    "my_image_validations_count": stats_result["my_image_validations"] or 0,  # 내 이미지가 검증된 것 (relation_type 2)  
+                    "self_validations_count": stats_result["self_validations"] or 0,  # 내가 내 이미지를 검증한 것 (relation_type 3)
+                    "total_records_count": stats_result["total_records"] or 0,
+                    "returned_records_count": len(validation_records)
+                },
+                "validation_records": validation_records,
+                "relation_types": {
+                    "1": "내가 검증한 데이터",
+                    "2": "내 이미지가 검증된 데이터", 
+                    "3": "내가 검증했고 대상도 내 이미지인 데이터"
+                }
+            }
+            
+            logger.info(f"Retrieved integrated validation summary for user {user_id}: {len(validation_records)} records")
+            
+            return BaseResponse(
+                success=True,
+                description="통합 검증 요약 정보를 조회했습니다.",
+                data=[summary_data]
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve integrated validation summary for user {user_id}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"통합 검증 요약 정보 조회 중 오류가 발생했습니다: {str(e)}"
+            )
+
 
 validation_service = ValidationService()
