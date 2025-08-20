@@ -87,7 +87,8 @@ class ImageService:
                     user_id=int(user_id), 
                     copyright=copyright, 
                     filename=original_filename,
-                    protection_algorithm=protection_enum
+                    protection_algorithm=protection_enum,
+                    use_openapi=False
                 )
                 .returning(Image)
             )
@@ -141,40 +142,127 @@ class ImageService:
             data=[response_data]
         )
     
+    async def upload_image_with_user_id(self, file: UploadFile, copyright: str, protection_algorithm: str, user_id: str) -> BaseResponse:
+        """API 키를 통한 이미지 업로드 처리 (user_id 직접 전달)"""
+        self.validate_file(file)
+        
+        # protection_algorithm 검증
+        try:
+            protection_enum = ProtectionAlgorithm(protection_algorithm)
+        except ValueError:
+            valid_algorithms = [alg.value for alg in ProtectionAlgorithm]
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"유효하지 않은 보호 알고리즘입니다. 사용 가능한 값: {valid_algorithms}"
+            )
+        
+        # 파일명 정리
+        original_filename = self.clean_filename(file.filename)
+        logger.info(f"Original filename: {file.filename} -> Cleaned: {original_filename}")
+        
+        # 파일 내용 읽기
+        file_content = await file.read()
+        
+        # 트랜잭션으로 전체 과정 처리
+        async with database.transaction():
+            # 1. DB에 이미지 정보 저장 (트랜잭션 내부)
+            query = (
+                sqlalchemy.insert(Image)
+                .values(
+                    user_id=int(user_id), 
+                    copyright=copyright, 
+                    filename=original_filename,
+                    protection_algorithm=protection_enum,
+                    use_openapi=True
+                )
+                .returning(Image)
+            )
+            
+            result = await database.fetch_one(query)
+            inserted_data = dict(result)
+            image_id = inserted_data["id"]
+
+            logger.info(f"Image uploaded to DB via API key: {inserted_data}")
+            
+            try:
+                # 2. AI 서버 요청
+                watermarked_image_content = await self._send_to_ai_server(file_content, image_id, protection_enum)
+                
+                # 3. S3에 원본(GT)과 워터마크(SRH) 이미지 업로드
+                # 파일명에서 확장자 제거
+                filename_without_ext = original_filename.rsplit('.', 1)[0] if '.' in original_filename else original_filename
+                gt_path = f"image/{image_id}/{filename_without_ext}_origi.png"
+                srh_path = f"image/{image_id}/{filename_without_ext}_wm.png"
+                
+                # S3 업로드 중 하나라도 실패하면 업로드된 파일들을 정리
+                uploaded_files = []
+                try:
+                    await self.storage_service.upload_file(file_content, gt_path)
+                    uploaded_files.append(gt_path)
+                    
+                    await self.storage_service.upload_file(watermarked_image_content, srh_path)
+                    uploaded_files.append(srh_path)
+                    
+                    logger.info(f"Files uploaded to S3 via API key: GT={gt_path}, SRH={srh_path}")
+                    
+                except Exception as s3_error:
+                    # 업로드 실패시 이미 업로드된 파일들 정리
+                    logger.error(f"S3 업로드 실패, 업로드된 파일 정리: {uploaded_files}")
+                    await self.storage_service.delete_multiple_files(uploaded_files)
+                    raise s3_error
+                
+            except Exception as e:
+                # AI 서버 또는 S3 업로드 실패 시 트랜잭션이 자동 롤백됨
+                logger.error(f"AI 서버 또는 S3 업로드 실패: {str(e)}")
+                logger.info(f"Transaction rolled back for image_id: {image_id}")
+                raise
+        
+        # 응답 데이터에 S3 URL 정보 추가
+        response_data = dict(inserted_data)
+        response_data["s3_paths"] = self.storage_service.get_image_urls(image_id, original_filename)
+        
+        return BaseResponse(
+            success=True, 
+            description="API를 통한 생성 성공", 
+            data=[response_data]
+        )
+    
     async def _send_to_ai_server(self, image_content: bytes, image_id:int, model:ProtectionAlgorithm) -> bytes:
         """AI 서버에 이미지를 전송하고 워터마크된 이미지를 받아온다"""
         try:
             # 이미지를 base64로 인코딩
             image_b64 = base64.b64encode(image_content).decode('utf-8')
 
-            # id 인코딩
-            
-            
-            
-            n = 63
-            t = 4
-            d = 2 * t + 1
-            bch = galois.BCH(n, d=d)
-            image_id_bit = f"{image_id:039b}"
-            image_id_bit_array = np.array([int(bit) for bit in image_id_bit])
-            codeword_array = bch.encode(image_id_bit_array)
-            codeword_string = "".join(str(bit) for bit in codeword_array)+'0'
+            # FAKEFACE 알고리즘은 테스트용으로 더미 처리
+            if model == ProtectionAlgorithm.FAKEFACE:
+                logger.info(f"FAKEFACE 테스트: 입력 이미지를 그대로 반환 (이미지 크기: {len(image_content)} bytes)")
+                # 테스트용으로 원본 이미지를 그대로 반환
+                return image_content
+            else:
+                # RobustWide, EditGuard는 기존 로직 사용
+                # id 인코딩
+                n = 63
+                t = 4
+                d = 2 * t + 1
+                bch = galois.BCH(n, d=d)
+                image_id_bit = f"{image_id:039b}"
+                image_id_bit_array = np.array([int(bit) for bit in image_id_bit])
+                codeword_array = bch.encode(image_id_bit_array)
+                codeword_string = "".join(str(bit) for bit in codeword_array)+'0'
 
-
+                # AI 서버로 전송할 데이터 구성
+                payload = {
+                    "image": image_b64,
+                    "bit_input": f"{codeword_string}",
+                    "model": model.value
+                }
             
-            # AI 서버로 전송할 데이터 구성
-            payload = {
-                "image": image_b64,
-                "bit_input": f"{codeword_string}",
-                "model": model.value
-            }
-            
-            # AI 서버에 요청
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{settings.AI_IP}/upload",
-                    json=payload
-                )
+                # AI 서버에 요청
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(
+                        f"{settings.AI_IP}/upload",
+                        json=payload
+                    )
                 
                 if response.status_code != 200:
                     raise HTTPException(
@@ -190,7 +278,7 @@ class ImageService:
                         detail="AI 서버에서 워터마크 처리 실패"
                     )
                 
-                # base64 디코딩하여 바이너리 데이터 반환
+                # base64 디코딩하여 바이너리 데이터 반환 (RobustWide, EditGuard)
                 watermarked_b64 = response_data["data"]["lr"]
                 return base64.b64decode(watermarked_b64)
                 
@@ -277,8 +365,18 @@ class ImageService:
             # AI 서버로 검증 요청
             verification_result = await self._send_to_ai_server_for_verification(file_content, protection_enum)
             
+            # 검증에 성공한 경우 원본 이미지의 저작권 정보 추가
+            original_image_id = verification_result.get("original_image_id")
+            logger.info(f"검증 결과에서 추출된 original_image_id: {original_image_id}")
+            if original_image_id:
+                copyright_info = await self._get_original_image_copyright(original_image_id)
+                verification_result["original_copyright"] = copyright_info
+            else:
+                logger.warning("original_image_id가 없어서 저작권 정보를 조회할 수 없습니다.")
+                verification_result["original_copyright"] = {}
+            
             # 위변조가 검출된 경우 원본 이미지 소유자에게 이메일 발송
-            if verification_result.get("tampering_rate", 0) > 5.0:  # 5% 이상 변조시 알림
+            if verification_result.get("tampering_rate", 0) > 0:  # 변조가 검출되면 무조건 알림
                 try:
                     await self._send_forgery_notification(verification_result, file.filename)
                 except Exception as e:
@@ -292,6 +390,59 @@ class ImageService:
             
         except Exception as e:
             logger.error(f"Image verification failed for user {user_id}: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"이미지 검증 중 오류가 발생했습니다: {str(e)}"
+            )
+    
+    async def verify_image_with_user_id(self, file: UploadFile, model: str, user_id: str) -> BaseResponse:
+        """API 키를 통한 이미지 위변조 검증 (user_id 직접 전달)"""
+        self.validate_file(file)
+        
+        # protection_algorithm 검증
+        try:
+            protection_enum = ProtectionAlgorithm(model)
+        except ValueError:
+            valid_algorithms = [alg.value for alg in ProtectionAlgorithm]
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"유효하지 않은 보호 알고리즘입니다. 사용 가능한 값: {valid_algorithms}"
+            )
+        
+        logger.info(f"User {user_id} requested image verification via API key with model {model}")
+        
+        try:
+            # 파일 내용 읽기
+            file_content = await file.read()
+            
+            # AI 서버로 검증 요청
+            verification_result = await self._send_to_ai_server_for_verification(file_content, protection_enum)
+            
+            # 검증에 성공한 경우 원본 이미지의 저작권 정보 추가
+            original_image_id = verification_result.get("original_image_id")
+            logger.info(f"검증 결과에서 추출된 original_image_id: {original_image_id}")
+            if original_image_id:
+                copyright_info = await self._get_original_image_copyright(original_image_id)
+                verification_result["original_copyright"] = copyright_info
+            else:
+                logger.warning("original_image_id가 없어서 저작권 정보를 조회할 수 없습니다.")
+                verification_result["original_copyright"] = {}
+            
+            # OPENAPI에서는 이메일 발송 비활성화
+            # if verification_result.get("tampering_rate", 0) > 0:  # 변조가 검출되면 무조건 알림
+            #     try:
+            #         await self._send_forgery_notification(verification_result, file.filename)
+            #     except Exception as e:
+            #         logger.error(f"위변조 알림 이메일 발송 실패: {str(e)}")
+            
+            return BaseResponse(
+                success=True,
+                description="API를 통한 이미지 위변조 검증이 완료되었습니다.",
+                data=[verification_result]
+            )
+            
+        except Exception as e:
+            logger.error(f"Image verification via API key failed for user {user_id}: {str(e)}")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"이미지 검증 중 오류가 발생했습니다: {str(e)}"
@@ -405,8 +556,7 @@ class ImageService:
                     calculated_tampering_rate = data.get("acc", 0)  # AI 서버 응답 사용
                 
                 return {
-                    "tampering_rate": calculated_tampering_rate,  # 계산된 변조률 사용
-                    "ai_tampering_rate": data.get("acc", 0),  # AI 서버 응답 변조률 (참고용)
+                    "ai_tampering_rate": data.get("acc", 0),  # AI 서버 응답 변조률
                     "tampered_regions_mask": mask_data,  # 변조된 부분 (base64 이미지)
                     "original_image_id": original_image_id  # 원본 이미지 ID (이진→정수)
                 }
@@ -482,6 +632,49 @@ class ImageService:
         except Exception as e:
             logger.error(f"위변조 알림 처리 중 오류 발생: {str(e)}")
             raise
+
+    async def _get_original_image_copyright(self, image_id: int) -> dict:
+        """원본 이미지의 저작권 정보 조회"""
+        try:
+            logger.info(f"원본 이미지 저작권 정보 조회 시작: image_id={image_id}")
+            
+            # 이미지와 사용자 정보를 JOIN해서 한번에 조회
+            query = (
+                sqlalchemy.select(
+                    Image.copyright,
+                    Image.filename,
+                    Image.time_created,
+                    Image.protection_algorithm,
+                    User.name.label("owner_name"),
+                    User.email.label("owner_email")
+                )
+                .select_from(Image.__table__.join(User.__table__, Image.user_id == User.id))
+                .where(Image.id == image_id)
+            )
+            
+            result = await database.fetch_one(query)
+            
+            if not result:
+                logger.warning(f"이미지 ID {image_id}를 찾을 수 없습니다.")
+                return {}
+            
+            copyright_info = {
+                "copyright": result["copyright"],
+                "filename": result["filename"],
+                "upload_time": result["time_created"].isoformat(),
+                "protection_algorithm": result["protection_algorithm"],
+                "owner_name": result["owner_name"],
+                "owner_email": result["owner_email"]
+            }
+            
+            logger.info(f"원본 이미지 저작권 정보 조회 완료: {copyright_info}")
+            return copyright_info
+            
+        except Exception as e:
+            logger.error(f"원본 이미지 저작권 정보 조회 실패: {str(e)}")
+            import traceback
+            logger.error(f"스택 트레이스: {traceback.format_exc()}")
+            return {}
 
 
 image_service = ImageService()

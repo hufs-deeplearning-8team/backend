@@ -1,6 +1,7 @@
 import re
 from datetime import datetime, timezone, timedelta
 from typing import Optional
+import sqlalchemy
 
 from fastapi import HTTPException, status
 from jose import JWTError, jwt
@@ -76,6 +77,28 @@ class AuthService:
         if not re.search(r'[!@#$%^&*(),.?":{}|<>]', password):
             return False
         return True
+    
+    async def get_user_id_from_api_key(self, api_key: str) -> str:
+        """API 키를 통해 사용자 ID 조회"""
+        if not api_key or not api_key.startswith('ak_'):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="유효하지 않은 API 키입니다"
+            )
+        
+        from app.db import database
+        from app.models import User
+        
+        query = User.__table__.select().where(User.api_key == api_key)
+        user = await database.fetch_one(query)
+        
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="유효하지 않은 API 키입니다"
+            )
+        
+        return str(user["id"])
 
 
 auth_service = AuthService()

@@ -9,6 +9,7 @@ Base = declarative_base()
 class ProtectionAlgorithm(Enum):
     RobustWide = "RobustWide"
     EditGuard = "EditGuard"
+    FAKEFACE = "FAKEFACE"
 
 class User(Base):
     __tablename__ = "user"
@@ -16,6 +17,7 @@ class User(Base):
     name = Column(String(255), nullable=False)
     email = Column(String(255), nullable=False, unique=True)
     password = Column(String(255), nullable=False)
+    api_key = Column(String(255), nullable=True, unique=True)
     time_created = Column(DateTime(timezone=True), server_default=func.now())
     
 
@@ -26,6 +28,7 @@ class Image(Base):
     filename = Column(String(255), nullable=False)
     copyright = Column(String(255), nullable=True)
     protection_algorithm = Column(SQLEnum(ProtectionAlgorithm), nullable=True)
+    use_openapi = Column(Boolean, nullable=False, default=False)
     time_created = Column(DateTime(timezone=True), server_default=func.now())
 
 class ValidationRecord(Base):

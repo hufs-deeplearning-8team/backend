@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any
 import logging
+import secrets
 
 from fastapi import HTTPException, status
 import sqlalchemy
@@ -16,6 +17,10 @@ logger = logging.getLogger(__name__)
 class UserService:
     def __init__(self):
         self.auth_service = auth_service
+    
+    def generate_api_key(self) -> str:
+        """API 키 생성"""
+        return f"ak_{secrets.token_urlsafe(32)}"
     
     async def create_user(self, user_data: UserCreate) -> BaseResponse:
         # 비밀번호 형식 검증
@@ -46,12 +51,16 @@ class UserService:
                 headers={"field": "email"}
             )
 
-        # 비밀번호 해시 및 사용자 생성
+        # 비밀번호 해시 및 API 키 생성
         hashed_password = self.auth_service.get_password_hash(user_data.password)
+        api_key = self.generate_api_key()
+        
+        # 사용자 생성
         insert_query = User.__table__.insert().values(
             name=user_data.name, 
             email=user_data.email, 
-            password=hashed_password
+            password=hashed_password,
+            api_key=api_key
         )
         await database.execute(insert_query)
         

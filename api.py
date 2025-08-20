@@ -1,5 +1,5 @@
 import logging
-from fastapi import APIRouter, UploadFile, File, Security, Form, Depends
+from fastapi import APIRouter, UploadFile, File, Security, Form, Depends, Header
 from fastapi.security import APIKeyHeader
 
 from app.schemas import BaseResponse, UserCreate, UserLogin, UserReportRequest, CustomReportRequest, UserReportStats
@@ -7,6 +7,7 @@ from app.services.user_service import user_service
 from app.services.image_service import image_service
 from app.services.validation_service import validation_service
 from app.services.email_service import email_service
+from app.services.auth_service import auth_service
 from app.models import ProtectionAlgorithm
 
 
@@ -124,6 +125,11 @@ async def get_algorithms():
             "name": "RobustWide", 
             "title": "어떤 공격에도 원본임을 지켜내야 할 때",
             "description": "강력한 AI 편집 공격에도 워터마크가 훼손되지 않는 최고의 생존력\n웹툰, 캐릭터 등 고부가가치 IP 자산이나 브랜드 로고를 보호할 때 가장 효과적"
+        },
+        "FAKEFACE": {
+            "name": "FAKEFACE",
+            "title": "얼굴 딥페이크 방지가 필요할 때",
+            "description": "얼굴을 딥페이크할 수 없게 하는 모델입니다\n인물 사진이나 프로필 이미지를 악용한 딥페이크 생성을 방지할 때 사용"
         }
     }
     
@@ -502,3 +508,54 @@ async def get_user_report_statistics(
         }
     """
     return await validation_service.get_user_report_statistics(access_token)
+
+
+# OPEN API 엔드포인트들 (API 키 기반 인증)
+@router.post("/open/generate",
+    summary="OPEN API 이미지 생성",
+    description="API 키를 사용하여 이미지를 업로드하고 워터마크를 적용합니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "이미지 생성 성공"},
+        400: {"description": "잘못된 파일 형식 또는 크기 초과"},
+        401: {"description": "유효하지 않은 API 키"},
+        500: {"description": "서버 오류"}
+    }
+)
+async def open_generate_image(
+    copyright: str = Form(..., description="저작권 정보", max_length=255),
+    protection_algorithm: str = Form(..., description="보호 알고리즘 (EditGuard, RobustWide, FAKEFACE)"),
+    file: UploadFile = File(..., description="업로드할 PNG 파일 (최대 10MB)"),
+    x_api_key: str = Header(..., alias="X-API-Key", description="API 키")
+):
+    """API 키를 사용한 이미지 생성"""
+    # API 키로 사용자 ID 조회
+    user_id = await auth_service.get_user_id_from_api_key(x_api_key)
+    
+    # 기존 image_service의 upload_image 로직을 재사용하되, API 키 기반으로 인증
+    # access_token 대신 user_id를 직접 전달하는 새 메서드 필요
+    return await image_service.upload_image_with_user_id(file, copyright, protection_algorithm, user_id)
+
+
+@router.post("/open/verify", 
+    summary="OPEN API 이미지 검증",
+    description="API 키를 사용하여 이미지의 위변조 여부를 검증합니다.",
+    response_model=BaseResponse,
+    responses={
+        200: {"description": "이미지 검증 성공"},
+        400: {"description": "잘못된 파일 형식"},
+        401: {"description": "유효하지 않은 API 키"},
+        500: {"description": "서버 오류"}
+    }
+)
+async def open_verify_image(
+    file: UploadFile = File(..., description="검증할 PNG 파일"),
+    model: str = Form(..., description="보호 알고리즘 (EditGuard, RobustWide, FAKEFACE)"),
+    x_api_key: str = Header(..., alias="X-API-Key", description="API 키")
+):
+    """API 키를 사용한 이미지 검증"""
+    # API 키로 사용자 ID 조회
+    user_id = await auth_service.get_user_id_from_api_key(x_api_key)
+    
+    # 기존 image_service의 verify_image 로직을 재사용하되, API 키 기반으로 인증
+    return await image_service.verify_image_with_user_id(file, model, user_id)
