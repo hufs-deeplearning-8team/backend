@@ -1,0 +1,104 @@
+services:
+  # SSL 인증서 발급 (최초 1회만 실행)
+  certbot-init:
+    image: certbot/certbot
+    container_name: aegis-certbot-init
+    ports:
+      - "80:80"
+    volumes:
+      - certbot-etc:/etc/letsencrypt
+      - web-root:/var/www/html
+    command: >
+      certonly --standalone
+      --email daehyuh@gmail.com
+      --agree-tos --no-eff-email
+      -d api.gdgoc.com
+      --non-interactive
+    profiles:
+      - ssl-init
+  
+  backend:
+    image: ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION_NAME}.amazonaws.com/${ECR_REPOSITORY_NAME}:${ECR_IMAGE_TAG}
+    container_name: aegis-backend
+    environment:
+      - TZ=Asia/Seoul
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_HOST=${DB_HOST}
+      - DB_PORT=${DB_PORT}
+      - DB_NAME=${DB_NAME}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION_NAME=${AWS_REGION_NAME}
+      - S3_DEPLOYMENT_BUCKET=${S3_DEPLOYMENT_BUCKET}
+      - IMAGEDIR=${IMAGEDIR}
+      - RECORDDIR=${RECORDDIR}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - JWT_ALGORITHM=${JWT_ALGORITHM}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES}
+      - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS}
+      - AI_IP=${AI_IP}
+      - AI_IP2=${AI_IP2}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_USE_TLS=${SMTP_USE_TLS}
+      - EMAIL_FROM=${EMAIL_FROM}
+      - EMAIL_FROM_NAME=${EMAIL_FROM_NAME}
+    expose:
+      - "8000"
+    networks:
+      - aegis-network
+    restart: unless-stopped
+    profiles:
+      - app
+
+  nginx:
+    image: nginx:alpine
+    container_name: aegis-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/conf:/etc/nginx/conf.d:ro
+      - certbot-etc:/etc/letsencrypt:ro
+      - web-root:/var/www/html
+    depends_on:
+      - backend
+    networks:
+      - aegis-network
+    restart: unless-stopped
+    profiles:
+      - app
+
+  # SSL 인증서 자동 갱신
+  certbot-renew:
+    image: alpine:latest
+    container_name: aegis-certbot-renew
+    volumes:
+      - certbot-etc:/etc/letsencrypt
+      - web-root:/var/www/html
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: >
+      sh -c "apk add --no-cache docker-cli certbot &&
+      while :; do
+        sleep 12h;
+        echo 'Checking for certificate renewal...';
+        certbot renew --quiet;
+        if [ \$$? -eq 0 ]; then
+          echo 'Certificate renewed, restarting nginx...';
+          docker restart aegis-nginx;
+        fi;
+      done"
+    restart: unless-stopped
+    profiles:
+      - app
+
+volumes:
+  certbot-etc:
+  web-root:
+
+networks:
+  aegis-network:
+    driver: bridge

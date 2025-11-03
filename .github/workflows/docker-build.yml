@@ -1,0 +1,144 @@
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  REGISTRY: ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION_NAME }}.amazonaws.com
+  IMAGE_NAME: ${{ secrets.ECR_REPOSITORY_NAME }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      
+    - name: Configure AWS credentials
+      if: github.event_name != 'pull_request'
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ secrets.AWS_REGION_NAME }}
+        
+    - name: Log in to Amazon ECR
+      if: github.event_name != 'pull_request'
+      uses: aws-actions/amazon-ecr-login@v2
+        
+    - name: Debug environment variables
+      run: |
+        echo "REGISTRY: ${{ env.REGISTRY }}"
+        echo "IMAGE_NAME: ${{ env.IMAGE_NAME }}"
+        echo "Full image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+        
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        tags: |
+          type=raw,value=latest
+          
+    - name: Debug push condition
+      run: |
+        echo "Event name: ${{ github.event_name }}"
+        echo "Ref: ${{ github.ref }}"
+        echo "Should push: ${{ github.event_name != 'pull_request' }}"
+        
+    - name: Build and push Docker image
+      timeout-minutes: 30
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        platforms: linux/amd64
+        provenance: false
+        sbom: false
+        push: ${{ github.event_name != 'pull_request' }}
+        tags: ${{ steps.meta.outputs.tags }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        
+    - name: Create deployment package
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      run: |
+        mkdir -p deployment-package
+        cp -r appspec.yml scripts/ deploy/ deployment-package/
+        
+        # Create .env file with secrets
+
+
+        cat > deployment-package/deploy/.env << 'EOF'
+        AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
+        AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        AWS_REGION_NAME=${{ secrets.AWS_REGION_NAME }}
+        AWS_REGION=${{ secrets.AWS_REGION_NAME }}
+        AWS_ACCOUNT_ID=${{ secrets.AWS_ACCOUNT_ID }}
+        ECR_REPOSITORY_ID=${{ secrets.AWS_ACCOUNT_ID }}
+        ECR_REPOSITORY_NAME=${{ secrets.ECR_REPOSITORY_NAME }}
+        ECR_REGION=${{ secrets.AWS_REGION_NAME }}
+        ECR_IMAGE_TAG=latest
+        DB_USER=${{ secrets.DB_USER }}
+        DB_PASSWORD=${{ secrets.DB_PASSWORD }}
+        DB_HOST=${{ secrets.DB_HOST }}
+        DB_PORT=${{ secrets.DB_PORT }}
+        DB_NAME=${{ secrets.DB_NAME }}
+        S3_DEPLOYMENT_BUCKET=${{ secrets.S3_DEPLOYMENT_BUCKET }}
+        BUCKET_NAME=${{ secrets.S3_DEPLOYMENT_BUCKET }}
+        IMAGEDIR=${{ secrets.IMAGEDIR }}
+        RECORDDIR=${{ secrets.RECORDDIR }}
+        JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
+        JWT_ALGORITHM=${{ secrets.JWT_ALGORITHM }}
+        ACCESS_TOKEN_EXPIRE_MINUTES=${{ secrets.ACCESS_TOKEN_EXPIRE_MINUTES }}
+        REFRESH_TOKEN_EXPIRE_DAYS=${{ secrets.REFRESH_TOKEN_EXPIRE_DAYS }}
+        AI_IP=${{ secrets.AI_IP }}
+        AI_IP2=${{ secrets.AI_IP2 }}
+        SMTP_HOST=${{ secrets.SMTP_HOST }}
+        SMTP_PORT=${{ secrets.SMTP_PORT }}
+        SMTP_USER=${{ secrets.SMTP_USER }}
+        SMTP_HOST=smtp.gmail.com
+        SMTP_PASSWORD=${{ secrets.SMTP_PASSWORD }}
+        SMTP_USE_TLS=${{ secrets.SMTP_USE_TLS }}
+        EMAIL_FROM=${{ secrets.EMAIL_FROM }}
+        EMAIL_FROM_NAME=${{ secrets.EMAIL_FROM_NAME }}
+        EOF
+                
+                cd deployment-package
+                zip -r ../deployment-${{ github.sha }}.zip .
+        
+    - name: Upload to S3
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      run: |
+        aws s3 cp deployment-${{ github.sha }}.zip s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/${{ secrets.ECR_REPOSITORY_NAME }}/deployment-${{ github.sha }}.zip
+        
+    - name: Create CodeDeploy deployment
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      run: |
+        aws deploy create-deployment \
+          --application-name ${{ secrets.CODEDEPLOY_APPLICATION_NAME }} \
+          --deployment-group-name ${{ secrets.CODEDEPLOY_DEPLOYMENT_GROUP }} \
+          --s3-location bucket=${{ secrets.S3_DEPLOYMENT_BUCKET }},key=${{ secrets.ECR_REPOSITORY_NAME }}/deployment-${{ github.sha }}.zip,bundleType=zip \
+          --region ${{ secrets.AWS_REGION_NAME }} || \
+        (echo "Deployment failed. Checking application existence..." && \
+         aws deploy list-applications --region ${{ secrets.AWS_REGION_NAME }} && \
+         aws deploy get-application --application-name ${{ secrets.CODEDEPLOY_APPLICATION_NAME }} --region ${{ secrets.AWS_REGION_NAME }})
+        
+    - name: Deploy notification
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+      run: |
+        echo "🚀 New image pushed: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+        echo "📦 Deployment package uploaded: s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/${{ secrets.ECR_REPOSITORY_NAME }}/deployment-${{ github.sha }}.zip"
+        echo "🚀 CodeDeploy deployment started for ${{ secrets.CODEDEPLOY_APPLICATION_NAME }}"
+        # 원격 서버에 웹훅 또는 알림을 보낼 수 있습니다
+        if [ -n "${{ secrets.DEPLOY_WEBHOOK_URL }}" ]; then
+          curl -X POST "${{ secrets.DEPLOY_WEBHOOK_URL }}" \
+            -H "Content-Type: application/json" \
+            -d '{"image": "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest", "deployment_package": "s3://${{ secrets.S3_DEPLOYMENT_BUCKET }}/${{ secrets.ECR_REPOSITORY_NAME }}/deployment-${{ github.sha }}.zip", "sha": "${{ github.sha }}"}'
+        fi
