@@ -27,7 +27,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",  # Next.js 개발 서버
-        "https://aegis.gdgoc.com"  # 프로덕션 도메인
+        "https://aegis.gdgoc.com"  # 프로덕션 도메인,
+        "https://frontend-rho-two-67.vercel.app"
     ],
     allow_credentials=True,
     allow_methods=["*"],
