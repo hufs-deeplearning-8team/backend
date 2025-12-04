@@ -68,7 +68,7 @@ class Settings:
 
     
     # File Upload Settings
-    MAX_FILE_SIZE_MB: int = 10
+    MAX_FILE_SIZE_MB: int = 100
     ALLOWED_FILE_TYPES: list = [".png"]
     ALLOWED_CONTENT_TYPES: list = ["image/png"]
     
