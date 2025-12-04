@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import base64
 import numpy as np
 import galois
@@ -234,65 +234,42 @@ class ImageService:
         )
     
     async def _send_to_ai_server(self, image_content: bytes, image_id:int, model:ProtectionAlgorithm) -> bytes:
-        """AI 서버에 이미지를 전송하고 워터마크된 이미지를 받아온다"""
+        """EditGuard 워터마크 API에 이미지를 전송하고 워터마크된 이미지를 받아온다"""
         try:
-            # 이미지를 base64로 인코딩
-            image_b64 = base64.b64encode(image_content).decode('utf-8')
-
-            # PhotoGuard 알고리즘은 AI_IP2 사용, 나머지는 AI_IP 사용
-            if model == ProtectionAlgorithm.PhotoGuard:
-                ai_server_url = settings.AI_IP2
-                logger.info(f"PhotoGuard 알고리즘: AI_IP2({ai_server_url}) 사용")
-                # PhotoGuard는 BCH 인코딩 없이 이미지만 전송
-                payload = {
-                    "image": image_b64,
-                    "model": model.value
-                }
-            else:
-                ai_server_url = settings.AI_IP
-                logger.info(f"{model.value} 알고리즘: AI_IP({ai_server_url}) 사용")
-                # RobustWide, EditGuard는 기존 로직 사용
-                # id 인코딩
-                n = 63
-                t = 4
-                d = 2 * t + 1
-                bch = galois.BCH(n, d=d)
-                image_id_bit = f"{image_id:039b}"
-                image_id_bit_array = np.array([int(bit) for bit in image_id_bit])
-                codeword_array = bch.encode(image_id_bit_array)
-                codeword_string = "".join(str(bit) for bit in codeword_array)+'0'
-
-                # AI 서버로 전송할 데이터 구성
-                payload = {
-                    "image": image_b64,
-                    "bit_input": f"{codeword_string}",
-                    "model": model.value
-                }
-            
-            # AI 서버에 요청
+            api_server_url = self._get_watermark_api_base_url()
+            watermark_bits = self._encode_image_id_to_watermark(image_id)
+            data = {
+                "watermark": watermark_bits
+            }
+            files = {
+                "image": (f"image_{image_id}.png", image_content, "image/png")
+            }
+            endpoint = f"{api_server_url}/watermark/embed"
+            logger.info(f"{model.value} 알고리즘: EditGuard API({endpoint}) 사용")
             async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{ai_server_url}/upload",
-                    json=payload
+                response = await client.post(endpoint, data=data, files=files)
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail=f"AI 서버 오류: {response.text}"
                 )
-                
-                if response.status_code != 200:
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"AI 서버 오류: {response.text}"
-                    )
-                
-                response_data = response.json()
-                
-                if not response_data.get("success"):
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail="AI 서버에서 워터마크 처리 실패"
-                    )
-                
-                # base64 디코딩하여 바이너리 데이터 반환 (RobustWide, EditGuard)
-                watermarked_b64 = response_data["data"]["lr"]
-                return base64.b64decode(watermarked_b64)
+            
+            response_data = response.json()
+            
+            if not response_data.get("success"):
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="EditGuard API에서 워터마크 처리 실패"
+                )
+            watermarked_b64 = response_data.get("watermarked_image")
+            if not watermarked_b64:
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="EditGuard API 응답에 워터마크 이미지가 없습니다."
+                )
+            
+            return base64.b64decode(watermarked_b64)
                 
         except httpx.TimeoutException:
             logger.error("AI 서버 요청 타임아웃")
@@ -462,120 +439,7 @@ class ImageService:
     
     async def _send_to_ai_server_for_verification(self, image_content: bytes, model: ProtectionAlgorithm) -> dict:
         try:
-            # 이미지를 base64로 인코딩
-            image_b64 = base64.b64encode(image_content).decode('utf-8')
-            
-            # RobustWide, EditGuard 검증은 AI_IP 사용
-            ai_server_url = settings.AI_IP
-            logger.info(f"{model.value} 검증: AI_IP({ai_server_url}) 사용")
-            
-            # AI 서버로 전송할 데이터 구성
-            payload = {
-                "sr_h": image_b64,
-                "model": model.value
-            }
-            
-            # AI 서버에 요청
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(
-                    f"{ai_server_url}/verify",
-                    json=payload
-                )
-                
-                if response.status_code != 200:
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail=f"AI 서버 오류: {response.text}"
-                    )
-                
-                response_data = response.json()
-                logger.info(f"AI 서버 응답: {response_data}")
-                
-                if not response_data.get("success"):
-                    raise HTTPException(
-                        status_code=status.HTTP_502_BAD_GATEWAY,
-                        detail="AI 서버에서 검증 처리 실패"
-                    )
-                
-                # 응답 데이터 구조에 따라 안전하게 접근
-                data = response_data.get("data", {})
-                mask_data = data.get("mask", "")
-                recovered_bit = data.get("recovered_bit", "0")
-
-               
-                # 1. BCH 파라미터 정의
-                # m=6에 해당 -> n = 2^6 - 1 = 63
-                n = 63
-                # 복구할 비트 수 (t=4로 설정)
-                t = 4
-                # 설계 거리 d 계산
-                d = 2 * t + 1
-                # 2. BCH 코드 생성
-                bch = galois.BCH(n, d=d)
-
-                logger.info(f"BCH 코드 생성 완료: n={n}, d={d}")
-                # recovered_bit를 이진 문자열을 정수로 변환
-                recovered_bit_array = np.array([int(bit) for bit in recovered_bit[0:-1]])
-                decoded_bit_array = bch.decode(recovered_bit_array, errors=True)
-                decoded_bit = "".join(str(bit) for bit in decoded_bit_array[0])
-                logger.info(f"Decoded bit: {decoded_bit}, type: {type(decoded_bit)}")
-                original_image_id = int(decoded_bit, 2)
-
-                logger.info(f"Recovered bit: {recovered_bit}, type: {type(recovered_bit)}")
-                logger.info(f"Original image ID: {original_image_id}, type: {type(original_image_id)}")
-                logger.info(f"Decoded bit array: {decoded_bit_array}, type: {type(decoded_bit_array)}") 
-
-
-                # mask 데이터에서 변조률 계산
-                calculated_tampering_rate = 0.0
-                if mask_data:
-                    try:
-                        # mask base64 디코딩해서 이미지로 변환
-                        from PIL import Image as PILImage
-                        import io
-                        
-                        mask_bytes = base64.b64decode(mask_data)
-                        
-                        logger.info(f"Mask 바이트 크기: {len(mask_bytes)}")
-                        logger.info(f"Mask base64 처음 100자: {mask_data[:100]}...")
-                        
-                        # PIL로 이미지 열기 시도
-                        mask_image = PILImage.open(io.BytesIO(mask_bytes))
-                        logger.info(f"Mask 이미지 모드: {mask_image.mode}, 크기: {mask_image.size}")
-                        
-                        # grayscale로 변환 (1과 0의 마스크이므로)
-                        if mask_image.mode != 'L':
-                            mask_image = mask_image.convert('L')
-                        
-                        # numpy 배열로 변환
-                        mask_array = np.array(mask_image)
-                        
-                        # 0과 1로 이루어진 mask에서 1의 개수로 변조률 계산
-                        # 픽셀값을 0 또는 1로 정규화 (0은 정상, 1은 변조)
-                        binary_mask = (mask_array > 0).astype(int)  # 0보다 큰 값은 모두 1로 변환
-                        
-                        total_pixels = binary_mask.size
-                        modified_pixels = np.sum(binary_mask)  # 1의 개수
-                        
-                        calculated_tampering_rate = (modified_pixels / total_pixels * 100) if total_pixels > 0 else 0.0  # 백분율로 변환
-                        
-                        logger.info(f"Mask 이미지 크기: {mask_image.size}")
-                        logger.info(f"원본 픽셀값 분포 - Min: {np.min(mask_array)}, Max: {np.max(mask_array)}")
-                        logger.info(f"이진화 후 - 0의 개수: {np.sum(binary_mask == 0)}, 1의 개수: {modified_pixels}")
-                        logger.info(f"변조률: {modified_pixels}/{total_pixels} = {calculated_tampering_rate:.4f}%")
-                        
-                    except Exception as e:
-                        logger.info(f"Mask 변조률 계산 실패: {e}")
-                        calculated_tampering_rate = data.get("acc", 0)  # AI 서버 응답 사용
-                else:
-                    logger.info("Mask 데이터 없음")
-                    calculated_tampering_rate = data.get("acc", 0)  # AI 서버 응답 사용
-                
-                return {
-                    "ai_tampering_rate": data.get("acc", 0),  # AI 서버 응답 변조률
-                    "tampered_regions_mask": mask_data,  # 변조된 부분 (base64 이미지)
-                    "original_image_id": original_image_id  # 원본 이미지 ID (이진→정수)
-                }
+            return await self._verify_with_editguard_server(image_content, model)
                 
         except httpx.TimeoutException:
             logger.error("AI 서버 검증 요청 타임아웃")
@@ -589,6 +453,88 @@ class ImageService:
                 status_code=status.HTTP_502_BAD_GATEWAY,
                 detail=f"AI 서버 통신 중 오류가 발생했습니다: {str(e)}"
             )
+
+    async def _verify_with_editguard_server(self, image_content: bytes, model: ProtectionAlgorithm, threshold: float = 0.2) -> dict:
+        api_server_url = self._get_watermark_api_base_url()
+        data = {
+            "threshold": str(threshold)
+        }
+        files = {
+            "image": (f"verify_{model.value}.png", image_content, "image/png")
+        }
+        endpoint = f"{api_server_url}/watermark/extract"
+        logger.info(f"{model.value} 검증: EditGuard API({endpoint}) 사용")
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(endpoint, data=data, files=files)
+        
+        if response.status_code != 200:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"EditGuard API 오류: {response.text}"
+            )
+        response_data = response.json()
+        logger.info(f"EditGuard API 응답: {response_data}")
+        
+        if not response_data.get("success"):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="EditGuard API에서 검증 처리 실패"
+            )
+        
+        watermark_bits = response_data.get("watermark", "")
+        original_image_id = self._decode_watermark_bits(watermark_bits)
+        mask_data = response_data.get("tamper_mask", "") or ""
+        tamper_ratio = float(response_data.get("tamper_ratio", 0.0) or 0.0)
+        tampering_rate = tamper_ratio * 100
+        
+        return {
+            "ai_tampering_rate": tampering_rate,
+            "tampering_rate": tampering_rate,
+            "tampered_regions_mask": mask_data,
+            "original_image_id": original_image_id,
+            "tamper_detected": response_data.get("tamper_detected", False)
+        }
+
+    def _get_watermark_api_base_url(self) -> str:
+        api_server_url = settings.AI_IP
+        if not api_server_url:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="워터마크 API 서버 주소가 설정되지 않았습니다."
+            )
+        return api_server_url.rstrip('/')
+
+    def _encode_image_id_to_watermark(self, image_id: int) -> str:
+        n = 63
+        t = 4
+        d = 2 * t + 1
+        bch = galois.BCH(n, d=d)
+        image_id_bit = f"{image_id:039b}"
+        image_id_bit_array = np.array([int(bit) for bit in image_id_bit])
+        codeword_array = bch.encode(image_id_bit_array)
+        return "".join(str(bit) for bit in codeword_array) + "0"
+
+    def _decode_watermark_bits(self, bit_string: str, drop_last_bit: bool = True) -> Optional[int]:
+        if not bit_string:
+            return None
+        trimmed = bit_string
+        if drop_last_bit and len(bit_string) > 63:
+            trimmed = bit_string[:-1]
+        if len(trimmed) != 63:
+            logger.warning(f"워터마크 비트 길이가 예상과 다릅니다: {len(trimmed)}")
+            return None
+        try:
+            bit_array = np.array([int(bit) for bit in trimmed])
+            n = 63
+            t = 4
+            d = 2 * t + 1
+            bch = galois.BCH(n, d=d)
+            decoded_bit_array = bch.decode(bit_array, errors=True)
+            decoded_bit = "".join(str(bit) for bit in decoded_bit_array[0])
+            return int(decoded_bit, 2)
+        except Exception as error:
+            logger.error(f"워터마크 디코딩 실패: {error}")
+            return None
 
     async def _send_forgery_notification(self, verification_result: dict, detected_filename: str) -> None:
         """위변조 검출시 원본 이미지 소유자에게 이메일 발송"""

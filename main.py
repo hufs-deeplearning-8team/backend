@@ -1,3 +1,4 @@
+import os
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -19,13 +20,27 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
 # CORS 설정
+default_origins = [
+    "http://localhost:3000",  # Next.js 개발 서버
+    "localhost:3000",
+    "https://aegis.gdgoc.com",  # 프로덕션 도메인
+    "http://18.224.39.118:3000",  # EC2 개발 서버
+]
+
+# allowed_origins = os.getenv("ALLOWED_ORIGINS")
+# if allowed_origins:
+#     # Allow overriding via comma-separated env var for flexibility across envs
+#     default_origins = [
+#         origin.strip()
+#         for origin in allowed_origins.split(",")
+#         if origin.strip()
+#     ]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",  # Next.js 개발 서버
-        "https://aegis.gdgoc.com"  # 프로덕션 도메인
-    ],
+    allow_origins=default_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

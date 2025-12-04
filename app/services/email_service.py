@@ -406,11 +406,7 @@ class EmailService:
         confidence_score = detection_info.get('confidence_score', 'N/A')
         detection_method = detection_info.get('detection_method', 'AI 분석')
         
-        # RobustWide인 경우 변조률 표시 처리
-        if detection_method == 'RobustWide':
-            confidence_display = '변조률 지원안함'
-        else:
-            confidence_display = f'{confidence_score}%'
+        confidence_display = f'{confidence_score}%' if confidence_score is not None else 'N/A'
         
         # 원본 이미지 정보
         original_info = original_image_info or {}

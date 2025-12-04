@@ -85,7 +85,7 @@ async def login(user: UserLogin):
 
 async def upload(
     copyright: str = Form(..., description="저작권 정보", max_length=255),
-    protection_algorithm: str = Form(..., description="보호 알고리즘 (EditGuard, OmniGuard, RobustWide)"),
+    protection_algorithm: str = Form(..., description="보호 알고리즘 (EditGuard)"),
     file: UploadFile = File(..., description="업로드할 PNG 파일 (최대 10MB)"),
     access_token: str = Security(APIKeyHeader(name='access-token'))
 ):
@@ -103,7 +103,7 @@ async def upload(
 )
 async def validate(
     file: UploadFile = File(..., description="검증할 PNG 파일"),
-    model: str = Form(..., description="보호 알고리즘 (EditGuard, OmniGuard, RobustWide)"),
+    model: str = Form(..., description="보호 알고리즘 (EditGuard)"),
     access_token: str = Security(APIKeyHeader(name='access-token'))
 ):
     return await validation_service.validate_image(file, model, access_token)
@@ -120,16 +120,6 @@ async def get_algorithms():
             "name": "EditGuard",
             "title": "어디가 변조되었는지 증명해야 할 때",
             "description": "딥페이크, 허위 정보 등 조작된 영역을 95% 이상 정밀도로 탐지\n언론 보도, 법적 분쟁 등 조작의 범위와 내용 증명이 핵심일 때 최적의 솔루션"
-        },
-        "RobustWide": {
-            "name": "RobustWide", 
-            "title": "어떤 공격에도 원본임을 지켜내야 할 때",
-            "description": "강력한 AI 편집 공격에도 워터마크가 훼손되지 않는 최고의 생존력\n웹툰, 캐릭터 등 고부가가치 IP 자산이나 브랜드 로고를 보호할 때 가장 효과적"
-        },
-        "PhotoGuard": {
-            "name": "PhotoGuard",
-            "title": "얼굴 딥페이크 방지가 필요할 때",
-            "description": "얼굴을 딥페이크할 수 없게 하는 모델입니다\n인물 사진이나 프로필 이미지를 악용한 딥페이크 생성을 방지할 때 사용"
         }
     }
     
@@ -525,7 +515,7 @@ async def get_user_report_statistics(
 )
 async def open_generate_image(
     copyright: str = Form(..., description="저작권 정보", max_length=255),
-    protection_algorithm: str = Form(..., description="보호 알고리즘 (EditGuard, RobustWide, PhotoGuard)"),
+    protection_algorithm: str = Form(..., description="보호 알고리즘 (EditGuard)"),
     file: UploadFile = File(..., description="업로드할 PNG 파일 (최대 10MB)"),
     x_api_key: str = Header(..., alias="X-API-Key", description="API 키")
 ):
@@ -552,7 +542,7 @@ async def open_generate_image(
 )
 async def open_verify_image(
     file: UploadFile = File(..., description="검증할 PNG 파일"),
-    model: str = Form(..., description="보호 알고리즘 (EditGuard, RobustWide)"),
+    model: str = Form(..., description="보호 알고리즘 (EditGuard)"),
     x_api_key: str = Header(..., alias="X-API-Key", description="API 키")
 ):
     """API 키를 사용한 이미지 검증"""

@@ -49,7 +49,7 @@ async def main():
     has_images = await check_images()
     
     if has_images:
-        print("\n✅ DB에 이미지가 있습니다. RobustWide 테스트 가능합니다.")
+        print("\n✅ DB에 이미지가 있습니다. EditGuard 테스트 가능합니다.")
     else:
         print("\n❌ DB에 이미지가 없습니다. 먼저 이미지를 업로드해야 합니다.")
 

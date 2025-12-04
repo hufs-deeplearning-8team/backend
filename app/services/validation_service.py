@@ -55,13 +55,8 @@ class ValidationService:
         
         await asyncio.sleep(0.5)  # AI 처리 시간 시뮬레이션
         
-        # 알고리즘별로 다른 결과 시뮬레이션
-        if algorithm == "EditGuard":
-            has_watermark = random.choice([True, True, False])  # 높은 감지율
-        elif algorithm == "OmniGuard":
-            has_watermark = random.choice([True, False, False])  # 중간 감지율
-        else:  # RobustWide
-            has_watermark = random.choice([True, False])  # 기본 감지율
+        # 단일 알고리즘(EditGuard) 결과 시뮬레이션
+        has_watermark = random.choice([True, True, False])
         
         # 워터마크가 감지된 경우에만 실제 존재하는 이미지 ID 사용
         detected_id = None
@@ -141,8 +136,8 @@ class ValidationService:
                     )
                 logger.info(f"복구된 image ID {original_image_id} 존재 확인 완료")
                 
-                # RobustWide 및 EditGuard 모델 특별 처리: 픽셀 비교 기반 마스크 생성
-                if validation_enum in [ProtectionAlgorithm.RobustWide, ProtectionAlgorithm.EditGuard]:
+                # EditGuard 모델 특별 처리: 픽셀 비교 기반 마스크 생성
+                if validation_enum == ProtectionAlgorithm.EditGuard:
                     await self._process_pixel_comparison_validation(
                         contents, original_image_id, verification_result, validation_enum
                     )
@@ -150,8 +145,7 @@ class ValidationService:
                 # original_image_id가 없는 경우 처리
                 logger.info(f"original_image_id가 없습니다: {original_image_id}")
                 
-                # RobustWide와 EditGuard의 경우 워터마크가 감지되지 않더라도 처리할 수 있도록 대안 로직 추가
-                if validation_enum in [ProtectionAlgorithm.RobustWide, ProtectionAlgorithm.EditGuard]:
+                if validation_enum == ProtectionAlgorithm.EditGuard:
                     logger.info(f"{validation_enum.value}: original_image_id 없음. AI 서버 응답 기반으로 처리합니다.")
                     # AI 서버에서 받은 기본 변조률과 mask 사용
                     # (실제 프로덕션에서는 다른 로직 구현 가능)
@@ -204,11 +198,7 @@ class ValidationService:
                     mask_s3_path = f"record/{validation_uuid}/mask.png"
                     await self.storage_service.upload_file(mask_bytes, mask_s3_path)
                     
-                    # 사용된 알고리즘에 따라 로그 메시지 구분
-                    if validation_enum in [ProtectionAlgorithm.RobustWide, ProtectionAlgorithm.EditGuard]:
-                        logger.info(f"{validation_enum.value} generated mask image saved to S3: {mask_s3_path}")
-                    else:
-                        logger.info(f"AI server mask image saved to S3: {mask_s3_path}")
+                    logger.info(f"{validation_enum.value} generated mask image saved to S3: {mask_s3_path}")
                     
                     # 원본 이미지와 mask를 합성한 이미지 생성
                     try:
@@ -219,11 +209,7 @@ class ValidationService:
                     except Exception as combine_error:
                         logger.error(f"Failed to create combined image: {str(combine_error)}")
                 else:
-                    # mask가 없는 경우 (변조되지 않은 경우)
-                    if validation_enum in [ProtectionAlgorithm.RobustWide, ProtectionAlgorithm.EditGuard]:
-                        logger.info(f"{validation_enum.value}: No tampering detected, empty mask generated")
-                    else:
-                        logger.info(f"AI server: No mask data provided")
+                    logger.info(f"{validation_enum.value}: No tampering detected, empty mask generated")
                     
             except Exception as s3_error:
                 logger.error(f"Failed to save validation images to S3: {str(s3_error)}")
@@ -579,22 +565,13 @@ class ValidationService:
                 detail=f"검증 레코드 조회 중 오류가 발생했습니다: {str(e)}"
             )
     
-    # RobustWide mask 생성 관련 상수
+    # 픽셀 비교 기반 마스크 생성 관련 상수
     PIXEL_DIFF_THRESHOLD = 10  # RGB 값 차이 임계값
     TAMPERED_COLOR = [255, 255, 255, 255]  # 하얀색, 불투명
     NORMAL_COLOR = [0, 0, 0, 0]  # 투명
-    
+
     async def _create_difference_mask(self, input_image_bytes: bytes, original_sr_h_bytes: bytes) -> tuple[str, float]:
-        """
-        RobustWide용 픽셀 차이 기반 마스크 생성
-        
-        Args:
-            input_image_bytes: 검증할 입력 이미지 바이트
-            original_sr_h_bytes: 원본 sr_h 이미지 바이트
-            
-        Returns:
-            tuple[str, float]: (base64 인코딩된 마스크 이미지, 변조률)
-        """
+        """EditGuard용 픽셀 차이 기반 마스크 생성"""
         try:
             # 이미지 로드 및 전처리
             input_image, original_image = self._load_and_preprocess_images(
@@ -610,13 +587,15 @@ class ValidationService:
             # 마스크 이미지 생성 및 인코딩
             mask_base64 = self._create_mask_image(tampered_mask)
             
-            logger.info(f"RobustWide mask 생성 완료: 변조률 {tampering_rate:.2f}% "
-                       f"({np.sum(tampered_mask)}/{tampered_mask.size} 픽셀)")
+            logger.info(
+                f"픽셀 비교 마스크 생성 완료: 변조률 {tampering_rate:.2f}% "
+                f"({np.sum(tampered_mask)}/{tampered_mask.size} 픽셀)"
+            )
             
             return mask_base64, tampering_rate
             
         except Exception as e:
-            logger.error(f"RobustWide mask 생성 중 오류: {str(e)}")
+            logger.error(f"픽셀 비교 마스크 생성 중 오류: {str(e)}")
             return "", 0.0
     
     def _load_and_preprocess_images(self, input_bytes: bytes, original_bytes: bytes) -> tuple:
@@ -698,15 +677,7 @@ class ValidationService:
         return base64.b64encode(mask_buffer.getvalue()).decode('utf-8')
     
     async def _process_pixel_comparison_validation(self, input_image_bytes: bytes, original_image_id: int, verification_result: dict, validation_enum: ProtectionAlgorithm) -> None:
-        """
-        픽셀 비교 기반 검증 처리 (RobustWide, EditGuard)
-        
-        Args:
-            input_image_bytes: 입력 이미지 바이트
-            original_image_id: 원본 이미지 ID
-            verification_result: 검증 결과 딕셔너리 (수정됨)
-            validation_enum: 검증 알고리즘
-        """
+        """픽셀 비교 기반 검증 처리"""
         try:
             # 원본 이미지 정보를 DB에서 조회하여 파일명 가져오기
             image_query = sqlalchemy.select(Image.filename).where(Image.id == original_image_id)

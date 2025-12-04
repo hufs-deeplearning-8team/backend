@@ -13,9 +13,7 @@ def kst_now():
     return datetime.now(KST)
 
 class ProtectionAlgorithm(Enum):
-    RobustWide = "RobustWide"
     EditGuard = "EditGuard"
-    PhotoGuard = "PhotoGuard"
 
 class User(Base):
     __tablename__ = "user"
