@@ -1,8 +1,6 @@
 import logging
 from typing import List, Dict, Any, Optional
 import base64
-import numpy as np
-import galois
 from fastapi import HTTPException, status, UploadFile
 import sqlalchemy
 import httpx
@@ -237,10 +235,11 @@ class ImageService:
         """EditGuard 워터마크 API에 이미지를 전송하고 워터마크된 이미지를 받아온다"""
         try:
             api_server_url = self._get_watermark_api_base_url()
-            watermark_bits = self._encode_image_id_to_watermark(image_id)
+            watermark_payload = self._encode_image_id_to_watermark(image_id)
             data = {
-                "watermark": watermark_bits
+                "watermark": watermark_payload
             }
+            logger.info(f"{model.value} watermark payload for image_id {image_id}: {watermark_payload}")
             files = {
                 "image": (f"image_{image_id}.png", image_content, "image/png")
             }
@@ -248,14 +247,37 @@ class ImageService:
             logger.info(f"{model.value} 알고리즘: EditGuard API({endpoint}) 사용")
             async with httpx.AsyncClient(timeout=60.0) as client:
                 response = await client.post(endpoint, data=data, files=files)
+            response_text = response.text
             
             if response.status_code != 200:
+                truncated = response_text[:500]
+                logger.error(f"EditGuard embed API returned {response.status_code}: {truncated}")
                 raise HTTPException(
                     status_code=status.HTTP_502_BAD_GATEWAY,
                     detail=f"AI 서버 오류: {response.text}"
                 )
             
-            response_data = response.json()
+            try:
+                response_data = response.json()
+            except ValueError as parse_error:
+                logger.error(f"EditGuard embed API JSON 파싱 실패: {parse_error}. 원본 응답: {response_text[:500]}")
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="EditGuard API 응답 파싱 실패"
+                )
+            
+            sanitized_response_log = dict(response_data)
+            if "watermarked_image" in sanitized_response_log:
+                sanitized_response_log["watermarked_image"] = "<omitted>"
+            logger.info(f"EditGuard embed API response (image omitted): {sanitized_response_log}")
+            
+            response_watermark = str(response_data.get("watermark"))
+            if response_watermark == watermark_payload:
+                logger.info(f"EditGuard embed watermark verification passed for image_id {image_id}")
+            else:
+                logger.warning(
+                    f"EditGuard embed watermark mismatch for image_id {image_id}. sent={watermark_payload}, received={response_watermark}"
+                )
             
             if not response_data.get("success"):
                 raise HTTPException(
@@ -466,6 +488,7 @@ class ImageService:
         logger.info(f"{model.value} 검증: EditGuard API({endpoint}) 사용")
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.post(endpoint, data=data, files=files)
+        logger.info(f"EditGuard API raw response: {response.text}")
         
         if response.status_code != 200:
             raise HTTPException(
@@ -482,7 +505,19 @@ class ImageService:
             )
         
         watermark_bits = response_data.get("watermark", "")
-        original_image_id = self._decode_watermark_bits(watermark_bits)
+        direct_original_id = response_data.get("original_image_id")
+        original_image_id = None
+
+        if direct_original_id is not None:
+            try:
+                original_image_id = int(direct_original_id)
+            except (TypeError, ValueError):
+                logger.warning(f"EditGuard API original_image_id 변환 실패: {direct_original_id}")
+                original_image_id = None
+
+        if original_image_id is None:
+            original_image_id = self._decode_watermark_bits(watermark_bits)
+
         mask_data = response_data.get("tamper_mask", "") or ""
         tamper_ratio = float(response_data.get("tamper_ratio", 0.0) or 0.0)
         tampering_rate = tamper_ratio * 100
@@ -505,33 +540,26 @@ class ImageService:
         return api_server_url.rstrip('/')
 
     def _encode_image_id_to_watermark(self, image_id: int) -> str:
-        n = 63
-        t = 4
-        d = 2 * t + 1
-        bch = galois.BCH(n, d=d)
-        image_id_bit = f"{image_id:039b}"
-        image_id_bit_array = np.array([int(bit) for bit in image_id_bit])
-        codeword_array = bch.encode(image_id_bit_array)
-        return "".join(str(bit) for bit in codeword_array) + "0"
+        """이미지 ID를 64비트 0/1 문자열로 변환"""
+        if image_id < 0:
+            raise ValueError("image_id는 0 이상이어야 합니다")
+        if image_id >= 2 ** 64:
+            raise ValueError("image_id가 64비트를 초과합니다")
+        return f"{image_id:064b}"
 
-    def _decode_watermark_bits(self, bit_string: str, drop_last_bit: bool = True) -> Optional[int]:
+    def _decode_watermark_bits(self, bit_string: str) -> Optional[int]:
+        """64비트 0/1 문자열을 정수 이미지 ID로 복원"""
         if not bit_string:
             return None
-        trimmed = bit_string
-        if drop_last_bit and len(bit_string) > 63:
-            trimmed = bit_string[:-1]
-        if len(trimmed) != 63:
-            logger.warning(f"워터마크 비트 길이가 예상과 다릅니다: {len(trimmed)}")
+        sanitized = str(bit_string).strip()
+        if len(sanitized) != 64:
+            logger.warning(f"워터마크 비트 길이가 예상과 다릅니다: {len(sanitized)}")
+            return None
+        if any(ch not in "01" for ch in sanitized):
+            logger.error("워터마크 문자열에 0/1 이외의 문자가 포함되어 있습니다")
             return None
         try:
-            bit_array = np.array([int(bit) for bit in trimmed])
-            n = 63
-            t = 4
-            d = 2 * t + 1
-            bch = galois.BCH(n, d=d)
-            decoded_bit_array = bch.decode(bit_array, errors=True)
-            decoded_bit = "".join(str(bit) for bit in decoded_bit_array[0])
-            return int(decoded_bit, 2)
+            return int(sanitized, 2)
         except Exception as error:
             logger.error(f"워터마크 디코딩 실패: {error}")
             return None
