@@ -14,6 +14,7 @@ def kst_now():
 
 class ProtectionAlgorithm(Enum):
     EditGuard = "EditGuard"
+    RobustWide = "RobustWide"  # legacy 데이터 호환용 (신규 입력은 제한)
 
 class User(Base):
     __tablename__ = "user"

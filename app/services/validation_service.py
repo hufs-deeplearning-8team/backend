@@ -99,6 +99,12 @@ class ValidationService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"유효하지 않은 검증 알고리즘입니다. 사용 가능한 값: {valid_algorithms}"
             )
+
+        if validation_enum != ProtectionAlgorithm.EditGuard:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="현재 EditGuard만 지원합니다."
+            )
         
         logger.info(f"User {user_id} started validation for file: {file.filename} with algorithm: {validation_algorithm}")
         

@@ -68,6 +68,11 @@ class ImageService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"유효하지 않은 보호 알고리즘입니다. 사용 가능한 값: {valid_algorithms}"
             )
+        if protection_enum != ProtectionAlgorithm.EditGuard:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="현재 EditGuard만 지원합니다."
+            )
         
         # 파일명 정리
         original_filename = self.clean_filename(file.filename)
@@ -155,6 +160,11 @@ class ImageService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"유효하지 않은 보호 알고리즘입니다. 사용 가능한 값: {valid_algorithms}"
+            )
+        if protection_enum != ProtectionAlgorithm.EditGuard:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="현재 EditGuard만 지원합니다."
             )
         
         # 파일명 정리
@@ -366,6 +376,11 @@ class ImageService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"유효하지 않은 보호 알고리즘입니다. 사용 가능한 값: {valid_algorithms}"
             )
+        if protection_enum != ProtectionAlgorithm.EditGuard:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="현재 EditGuard만 지원합니다."
+            )
         
         logger.info(f"User {user_id} requested image verification with model {model}")
         
@@ -418,6 +433,11 @@ class ImageService:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"유효하지 않은 보호 알고리즘입니다. 사용 가능한 값: {valid_algorithms}"
+            )
+        if protection_enum != ProtectionAlgorithm.EditGuard:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="현재 EditGuard만 지원합니다."
             )
         
         logger.info(f"User {user_id} requested image verification via API key with model {model}")
